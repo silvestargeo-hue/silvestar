@@ -17,7 +17,7 @@ import time
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -158,7 +158,7 @@ async def archive_search(q: str = Query(..., min_length=1, max_length=500),
                          user_id: str = "anon",
                          vault_session_token: str = ""):
     """Public global search across the Archive AND (when unlocked) the user's Vault."""
-    session = vault.validate(user_id, vault_session_token) if vault_session_token else None
+    session = await vault.validate(user_id, vault_session_token) if vault_session_token else None
     hits = await rag.retrieve(q, user_id, session, limit_per_lib=limit)
     return {
         "query": q,
@@ -256,7 +256,7 @@ async def vault_delete(doc_id: str, user_id: str, session_token: str):
 async def rag_query(body: AskIn):
     session = None
     if body.vault_session_token:
-        session = vault.validate(body.user_id, body.vault_session_token)
+        session = await vault.validate(body.user_id, body.vault_session_token)
     context, cited = await rag.build_context(body.question, body.user_id, session)
     return {
         "context": context,
@@ -338,3 +338,104 @@ async def graph_query(q: str):
 @app.get("/api/v1/graph/stats", tags=["graph"])
 async def graph_stats():
     return await graph.stats()
+
+
+# ------------------------------------------- Modules 10-11: Admin/User panels ---
+def _require_admin(request: Request) -> None:
+    key = request.headers.get("x-admin-key", "")
+    if not key or key != settings.admin_key:
+        raise HTTPException(403, "admin key required")
+
+
+class AdminDocIn(BaseModel):
+    title: str
+    content: str
+    tags: list[str] = []
+
+
+class ModelIn(BaseModel):
+    model: str = ""
+
+
+@app.get("/api/v1/admin/overview", tags=["admin"])
+async def admin_overview(request: Request):
+    _require_admin(request)
+    _docs, total = await db.list("archive", limit=1)
+    try:
+        realtime_info = hub.stats() if hasattr(hub, "stats") else {"rooms": "n/a"}
+    except Exception:
+        realtime_info = {"rooms": 0}
+    model_override = await cache.get("ai:model")
+    return {
+        "archive_documents": total,
+        "vault": await vault.stats(),
+        "realtime": realtime_info,
+        "graph": await graph.stats(),
+        "ai": {**await ai.health(), "model_override": model_override, "configured_model": settings.ai_model},
+        "modes": {"db": (await db.health()).get("mode"), "cache": (await cache.health()).get("mode")},
+        "uptime_s": int(time.time() - started_at),
+    }
+
+
+@app.post("/api/v1/admin/documents", tags=["admin"])
+async def admin_add_document(request: Request, body: AdminDocIn):
+    _require_admin(request)
+    import uuid
+
+    doc_id = "a-" + uuid.uuid4().hex[:12]
+    saved = await db.upsert_document(
+        doc_id, "archive", body.title, body.content,
+        meta={"source": "admin", "tags": body.tags},
+    )
+    await cache.delete("archive:stats")
+    await graph.merge_node(doc_id, ["Document"], {"title": body.title, "library": "archive"})
+    return saved
+
+
+@app.delete("/api/v1/admin/documents/{doc_id}", tags=["admin"])
+async def admin_delete_document(doc_id: str, request: Request):
+    _require_admin(request)
+    doc = await db.fetch(doc_id)
+    if not doc:
+        raise HTTPException(404, "document not found")
+    await db.delete(doc_id)
+    await cache.delete("archive:stats")
+    return {"deleted": True}
+
+
+@app.post("/api/v1/admin/cache/clear", tags=["admin"])
+async def admin_cache_clear(request: Request):
+    _require_admin(request)
+    await cache.clear()
+    return {"cleared": True}
+
+
+@app.post("/api/v1/admin/ai/model", tags=["admin"])
+async def admin_set_ai_model(request: Request, body: ModelIn):
+    """Runtime AI model switch — persisted in cache, applied on next ask."""
+    _require_admin(request)
+    if body.model:
+        await cache.set("ai:model", body.model)
+    else:
+        await cache.delete("ai:model")
+    return {"active_model": body.model or settings.ai_model, "persisted": bool(body.model)}
+
+
+@app.get("/api/v1/me/stats", tags=["user"])
+async def me_stats(user_id: str = Query(...), session_token: str = Query("")):
+    session = await vault.validate(user_id, session_token) if session_token else None
+    _docs, archive_total = await db.list("archive", limit=1)
+    vault_count = 0
+    if session and session.valid:
+        vault_docs, _ = await db.list(f"vault:{user_id}", limit=200)
+        vault_count = len(vault_docs)
+    recent, _t = await db.list("archive", limit=5)
+    ai_h = await ai.health()
+    return {
+        "user_id": user_id,
+        "vault_unlocked": bool(session and session.valid),
+        "vault_documents": vault_count,
+        "archive_documents": archive_total,
+        "recent_archive": [{"id": d["id"], "title": d["title"]} for d in recent],
+        "ai": {"assistant": ai_h.get("assistant"), "reachable": ai_h.get("primary_reachable")},
+    }

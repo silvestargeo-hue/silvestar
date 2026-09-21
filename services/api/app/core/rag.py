@@ -96,3 +96,4 @@ class VaultSessionInfo:
     user_id: str
     valid: bool = False
     expires_at: float = 0.0
+    key: bytes | None = None  # stateless sessions carry the AES key inside the token

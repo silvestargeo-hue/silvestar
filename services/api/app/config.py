@@ -41,6 +41,7 @@ class Settings:
     puter_proxy_url: str = field(default_factory=lambda: os.getenv("PUTER_PROXY_URL", ""))
     # --- Security ---
     secret_key: str = field(default_factory=lambda: os.getenv("SECRET_KEY", "silvestar-dev-secret-change-me"))
+    admin_key: str = field(default_factory=lambda: os.getenv("SILVESTAR_ADMIN_KEY", "silvestar-admin"))
     vault_kdf_iterations: int = field(default_factory=lambda: int(os.getenv("VAULT_KDF_ITERATIONS", "200000")))
     # --- Misc ---
     cors_origins: list = field(default_factory=lambda: [

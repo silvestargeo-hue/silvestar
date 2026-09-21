@@ -23,12 +23,12 @@ from .rag import build_context, system_prompt
 class SilvestarAI:
     name = "Silvestar"
 
-    async def _post_openai(self, messages: list[dict]) -> str | None:
+    async def _post_openai(self, messages: list[dict], model_override: str | None = None) -> str | None:
         """OpenAI-compatible chat with auth + model failover (429/ratelimit aware)."""
         headers = {"Content-Type": "application/json"}
         if settings.ai_api_key:
             headers["Authorization"] = f"Bearer {settings.ai_api_key}"
-        for model in [settings.ai_model, *settings.ai_failover_models]:
+        for model in [model_override or settings.ai_model, *settings.ai_failover_models]:
             for attempt in range(2):  # one retry per model on transient errors
                 try:
                     async with httpx.AsyncClient(timeout=30) as client:
@@ -92,7 +92,7 @@ class SilvestarAI:
         session = None
         if vault_session_token:
             from .vault import vault as vault_svc
-            session = vault_svc.validate(user_id, vault_session_token)
+            session = await vault_svc.validate(user_id, vault_session_token)
 
         context, cited = await build_context(question, user_id, session)
         messages = [{"role": "system", "content": system_prompt(context, cited)}]
@@ -101,8 +101,16 @@ class SilvestarAI:
         messages.append({"role": "user", "content": question})
 
         context_suffix = ("\n\nContext:\n" + context) if context else ""
+        # runtime model override (set from the Admin Panel) wins over config
+        override_model = None
+        try:
+            from .cache import cache
+            override_model = await cache.get("ai:model")
+        except Exception:
+            pass
+        effective_model = override_model or settings.ai_model
         engines = [
-            ("openai-compatible", lambda: self._post_openai(messages)),
+            ("openai-compatible", lambda: self._post_openai(messages, effective_model)),
             ("pollinations-get", lambda: self._get_completion(question + context_suffix)),
             ("puter-proxy", lambda: self._puter_proxy(messages)),
         ]

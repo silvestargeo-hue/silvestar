@@ -48,6 +48,7 @@ services:
       dockerfile: infra/Dockerfile.api
     environment:
       SILVESTAR_SECRET: ${SILVESTAR_SECRET:-change-me-in-prod}
+      SILVESTAR_ADMIN_KEY: ${SILVESTAR_ADMIN_KEY:-silvestar-admin}
       DATABASE_URL: postgresql://silvestar:${POSTGRES_PASSWORD:-silvestar_dev}@db:5432/silvestar
       REDIS_URL: redis://redis:6379/0
       NEO4J_URL: bolt://neo4j:7687

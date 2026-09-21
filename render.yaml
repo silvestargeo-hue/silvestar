@@ -17,6 +17,8 @@ services:
     envVars:
       - key: SILVESTAR_SECRET
         generateValue: true
+      - key: SILVESTAR_ADMIN_KEY
+        generateValue: true
       - key: PYTHON_VERSION
         value: "3.12"
 

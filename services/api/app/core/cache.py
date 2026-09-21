@@ -34,6 +34,9 @@ class MemoryCache:
     async def delete(self, key: str) -> None:
         self._data.pop(key, None)
 
+    async def clear(self) -> None:
+        self._data.clear()
+
     async def incr(self, key: str, ttl: int | None = None) -> int:
         cur = await self.get(key)
         n = (int(cur) if cur else 0) + 1
@@ -58,6 +61,15 @@ class RedisCache:
 
     async def delete(self, key: str) -> None:
         await self._r.delete(key)
+
+    async def clear(self) -> None:
+        """Clear only app-managed keys (never flush a shared Redis)."""
+        keys: list[str] = []
+        for pattern in ("archive:*", "ai:*", "vault:revoke:*", "graph:*", "rate:*"):
+            async for k in self._r.scan_iter(match=pattern):
+                keys.append(k)
+        if keys:
+            await self._r.delete(*keys)
 
     async def incr(self, key: str, ttl: int | None = None) -> int:
         n = await self._r.incr(key)
@@ -95,6 +107,11 @@ class Cache:
 
     async def incr(self, key: str, ttl: int | None = None) -> int:
         return await self._impl.incr(key, ttl)
+
+    async def clear(self) -> None:
+        clear = getattr(self._impl, "clear", None)
+        if clear:
+            await clear()
 
     async def health(self) -> dict:
         return await self._impl.health()
