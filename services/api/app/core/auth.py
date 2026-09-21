@@ -107,9 +107,24 @@ class AuthService:
         code = f"{secrets.randbelow(900000) + 100000:06d}"
         await cache.set("vc:" + email, self._otp_hash(email, code), ttl=86400)
         sent = await self._send_otp_email(email, code)
-        verification = {"required": True, "expires_in": 86400}
         if not sent:
-            verification["dev_code"] = code
+            # No SMTP configured — email verification is impossible, so activate
+            # the account immediately (admins can still manage it from the panel).
+            await db.upsert_document(
+                _doc_id(email), ACCOUNTS_LIB,
+                display_name.strip() or email.split("@")[0],
+                rec["hash"],
+                meta={
+                    "salt": rec["salt"], "iterations": rec["iterations"],
+                    "user_id": user_id, "role": role, "status": "active",
+                    "display_name": display_name.strip() or email.split("@")[0],
+                    "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "verified": True,
+                },
+            )
+            verification = {"required": False}
+        else:
+            verification = {"required": True, "expires_in": 86400}
         return {"user": user, "verification": verification}
 
     async def authenticate(self, email: str, password: str) -> dict:
