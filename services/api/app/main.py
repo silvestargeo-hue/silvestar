@@ -654,6 +654,7 @@ async def admin_backup(request: Request):
 
 # ====================== Modules 12-13: accounts, auth, user control ======================
 from .core.auth import ACCOUNTS_LIB, AuthError, auth  # noqa: E402
+from .core.auth import SESSION_TTL, SESSION_TTL_REMEMBER  # noqa: E402
 
 
 class RegisterIn(BaseModel):
@@ -665,6 +666,12 @@ class RegisterIn(BaseModel):
 class LoginIn(BaseModel):
     email: str
     password: str
+    remember: bool = False
+
+
+class VerifyIn(BaseModel):
+    email: str
+    code: str
 
 
 class ProfileIn(BaseModel):
@@ -702,12 +709,12 @@ async def _current_user(session_token: str) -> dict:
 @app.post("/api/v1/auth/register", tags=["auth"])
 async def auth_register(body: RegisterIn):
     try:
-        user = await auth.register(body.email, body.password, body.display_name)
+        r = await auth.register(body.email, body.password, body.display_name)
+        user = r["user"]
         acct = await auth.authenticate(body.email, body.password)
         token = auth.issue_auth_token(acct)
         await _audit("auth.register", f"{user['email']} role={user['role']}")
-        return {"user": user, "session_token": token}
-
+        return {"user": user, "session_token": token, "verification": r.get("verification")}
     except AuthError as e:
         raise HTTPException(400, str(e))
 
@@ -718,9 +725,28 @@ async def auth_login(body: LoginIn):
         acct = await auth.authenticate(body.email, body.password)
     except AuthError as e:
         raise HTTPException(401, str(e))
-    token = auth.issue_auth_token(acct)
-    await _audit("auth.login", acct["email"])
-    return {"user": auth.public(acct), "session_token": token}
+    ttl = SESSION_TTL_REMEMBER if body.remember else SESSION_TTL
+    token = auth.issue_auth_token(acct, ttl)
+    await auth.touch_login(body.email)
+    await _audit("auth.login", f"{acct['email']} remember={body.remember}")
+    return {"user": auth.public(acct), "session_token": token,
+            "expires_in": ttl, "verified": bool(acct.get("verified"))}
+
+
+@app.post("/api/v1/auth/verify", tags=["auth"])
+async def auth_verify(body: VerifyIn):
+    try:
+        user = await auth.verify_email(body.email, body.code)
+    except AuthError as e:
+        raise HTTPException(400, str(e))
+    await _audit("auth.verified", body.email)
+    return {"user": user}
+
+
+@app.post("/api/v1/auth/verify/resend", tags=["auth"])
+async def auth_verify_resend(body: OtpRequestIn):
+    r = await auth.resend_verification(body.email)
+    return r
 
 
 @app.post("/api/v1/auth/session", tags=["auth"])
@@ -811,6 +837,9 @@ async def admin_users(request: Request):
             "status": m.get("status", "active"),
             "display_name": r.get("title", ""),
             "created": m.get("created", ""),
+            "verified": bool(m.get("verified", False)),
+            "last_login": m.get("last_login", ""),
+            "vault_documents": await auth.vault_doc_count(m.get("user_id", "")),
         })
     users.sort(key=lambda u: (u["role"] != "admin", u["created"]))
     return {"total": total, "users": users}

@@ -178,8 +178,15 @@ export function AdminPanel() {
                   <div className="umeta">{u.email} · {u.user_id}</div>
                 </td>
                 <td>{u.role === "admin" ? "🛡 admin" : "member"}</td>
-                <td>{u.status === "active" ? <span className="badge ok">active</span> : <span className="badge err">suspended</span>}</td>
-                <td><span className="umeta">{u.created?.slice(0, 10)}</span></td>
+                <td>
+                  {u.status === "active" ? <span className="badge ok">active</span> : <span className="badge err">suspended</span>}
+                  {u.verified ? <span className="badge ok" title="email verified">✓ verified</span> : <span className="badge">unverified</span>}
+                </td>
+                <td>
+                  <div className="umeta">joined {u.created?.slice(0, 10)}</div>
+                  <div className="umeta">last login: {u.last_login ? u.last_login.slice(0, 16).replace("T", " ") : "never"}</div>
+                  <div className="umeta">vault docs: {u.vault_documents ?? 0}</div>
+                </td>
                 <td>
                   <div className="uactions">
                     {u.status === "active" ? (

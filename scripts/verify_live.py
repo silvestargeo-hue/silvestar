@@ -158,10 +158,16 @@ def main() -> int:
     em = f"owner-{stamp}@silvestar.dev"
     reg = call("POST", "/api/v1/auth/register", {
         "email": em, "password": "Passw0rd!23", "display_name": "Owner"})
+    vcode = (reg.get("verification") or {}).get("dev_code")
+    if vcode:
+        check("auth email verify", lambda: call("POST", "/api/v1/auth/verify", {
+            "email": em, "code": vcode})["user"]["verified"])
     check("auth register (first=admin)", lambda: reg["user"]["role"])
     ahdr = {"Authorization": "Bearer " + reg["session_token"]}
     check("auth login", lambda: call("POST", "/api/v1/auth/login", {
         "email": em, "password": "Passw0rd!23"})["user"]["email"])
+    check("auth remember 30d", lambda: f"{call('POST', '/api/v1/auth/login', {
+        'email': em, 'password': 'Passw0rd!23', 'remember': True})['expires_in'] // 86400}d token")
     check("auth session validate", lambda: call("POST", "/api/v1/auth/session", {
         "session_token": reg["session_token"]})["user"]["user_id"])
     check("auth profile update", lambda: call("PUT", "/api/v1/auth/profile", {

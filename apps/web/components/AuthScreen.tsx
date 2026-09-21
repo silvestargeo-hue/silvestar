@@ -8,7 +8,7 @@ import { api, type AuthUser } from "@/lib/api";
 import { LockScene } from "./LockScene";
 import { passwordStrength } from "@/lib/kit";
 
-type Mode = "signin" | "signup" | "forgot" | "otp";
+type Mode = "signin" | "signup" | "forgot" | "otp" | "verify";
 
 export function AuthScreen({ onAuthed }: {
   onAuthed: (sessionToken: string, user: AuthUser) => void;
@@ -18,6 +18,8 @@ export function AuthScreen({ onAuthed }: {
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
+  const [remember, setRemember] = useState(true);
+  const [pendingVerify, setPendingVerify] = useState<{ email: string; token: string; user: AuthUser; devCode?: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -29,7 +31,7 @@ export function AuthScreen({ onAuthed }: {
     e.preventDefault();
     setBusy(true); setError("");
     try {
-      const r = await api.authLogin(email.trim(), password);
+      const r = await api.authLogin(email.trim(), password, remember);
       onAuthed(r.session_token, r.user);
     } catch (err) {
       setError(String(err instanceof Error ? err.message : err).replace(/^\d+:\s*/, ""));
@@ -41,7 +43,15 @@ export function AuthScreen({ onAuthed }: {
     setBusy(true); setError("");
     try {
       const r = await api.authRegister(email.trim(), password, name);
-      onAuthed(r.session_token, r.user);
+      const dev = r.verification?.dev_code;
+      if (r.verification?.required) {
+        setPendingVerify({ email: email.trim(), token: r.session_token, user: r.user, devCode: dev });
+        setMode("verify");
+        if (dev) setNotice(`Dev mode: verification code is ${dev}`);
+        else setNotice("Verification code sent — check your inbox.");
+      } else {
+        onAuthed(r.session_token, r.user);
+      }
     } catch (err) {
       setError(String(err instanceof Error ? err.message : err).replace(/^\d+:\s*/, ""));
     } finally { setBusy(false); }
@@ -69,11 +79,33 @@ export function AuthScreen({ onAuthed }: {
     setBusy(true); setError("");
     try {
       await api.authReset(email.trim(), code.trim(), password);
-      const r = await api.authLogin(email.trim(), password);
+      const r = await api.authLogin(email.trim(), password, remember);
       onAuthed(r.session_token, r.user);
     } catch (err) {
       setError(String(err instanceof Error ? err.message : err).replace(/^\d+:\s*/, ""));
     } finally { setBusy(false); }
+  };
+
+  const submitVerify = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!pendingVerify) return;
+    setBusy(true); setError("");
+    try {
+      await api.authVerify(pendingVerify.email, code.trim());
+      onAuthed(pendingVerify.token, { ...pendingVerify.user, verified: true });
+    } catch (err) {
+      setError(String(err instanceof Error ? err.message : err).replace(/^\d+:\s*/, ""));
+    } finally { setBusy(false); }
+  };
+
+  const resendVerify = async () => {
+    if (!pendingVerify) return;
+    try {
+      const r = await api.authVerifyResend(pendingVerify.email);
+      setNotice(r.dev_code ? `Dev mode: new code is ${r.dev_code}` : "New code sent.");
+    } catch (err) {
+      setError(String(err instanceof Error ? err.message : err).replace(/^\d+:\s*/, ""));
+    }
   };
 
   return (
@@ -84,6 +116,7 @@ export function AuthScreen({ onAuthed }: {
           <div className="locklogo">⭐</div>
           <h1>Silvestar</h1>
           {mode === "signin" && <p>Sign in to your profile.</p>}
+          {mode === "verify" && <p>Verify {pendingVerify?.email} to finish creating your account.</p>}
           {mode === "signup" && <p>Create your unique profile{""} — the first account becomes the admin.</p>}
           {mode === "forgot" && <p>Enter your account email — we'll send a 6-digit reset code.</p>}
           {mode === "otp" && <p>Enter the 6-digit code and your new password.</p>}
@@ -96,6 +129,20 @@ export function AuthScreen({ onAuthed }: {
             <input className="lockinput" type="password" name="password" autoComplete="current-password"
               placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} required />
             <button className="lockbtn" type="submit" disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
+            <label className="remember-row">
+              <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+              Remember this device for 30 days
+            </label>
+          </form>
+        )}
+
+        {mode === "verify" && (
+          <form onSubmit={submitVerify}>
+            <input className="lockinput" type="text" inputMode="numeric" maxLength={6}
+              placeholder="6-digit verification code" value={code}
+              onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))} required />
+            <button className="lockbtn" type="submit" disabled={busy}>{busy ? "Verifying…" : "Verify & continue"}</button>
+            <button type="button" className="linkish" style={{ marginTop: 10 }} onClick={resendVerify}>Resend code</button>
           </form>
         )}
 
@@ -154,6 +201,9 @@ export function AuthScreen({ onAuthed }: {
           )}
           {(mode === "signup" || mode === "forgot") && (
             <button className="linkish dim" onClick={() => swap("otp")}>Have a code already?</button>
+          )}
+          {mode === "verify" && (
+            <button className="linkish dim" onClick={() => onAuthed(pendingVerify!.token, pendingVerify!.user)}>Skip for now</button>
           )}
         </div>
 

@@ -45,6 +45,7 @@ export interface Hit {
 export interface AuthUser {
   user_id: string; email: string; role: "admin" | "user";
   status: "active" | "suspended"; display_name: string; created: string;
+  verified?: boolean; last_login?: string; vault_documents?: number;
 }
 
 export interface AskResult {
@@ -164,13 +165,17 @@ export const api = {
 
   // ---- Modules 12-13: accounts & auth ----
   authRegister: (email: string, password: string, display_name = "") =>
-    req<{ user: AuthUser; session_token: string }>("/api/v1/auth/register", {
+    req<{ user: AuthUser; session_token: string; verification?: { required: boolean; dev_code?: string } }>("/api/v1/auth/register", {
       method: "POST", body: JSON.stringify({ email, password, display_name }),
     }),
-  authLogin: (email: string, password: string) =>
-    req<{ user: AuthUser; session_token: string }>("/api/v1/auth/login", {
-      method: "POST", body: JSON.stringify({ email, password }),
+  authLogin: (email: string, password: string, remember = false) =>
+    req<{ user: AuthUser; session_token: string; expires_in: number; verified: boolean }>("/api/v1/auth/login", {
+      method: "POST", body: JSON.stringify({ email, password, remember }),
     }),
+  authVerify: (email: string, code: string) =>
+    req<{ user: AuthUser }>("/api/v1/auth/verify", { method: "POST", body: JSON.stringify({ email, code }) }),
+  authVerifyResend: (email: string) =>
+    req<{ sent: boolean; dev_code?: string }>("/api/v1/auth/verify/resend", { method: "POST", body: JSON.stringify({ email }) }),
   authSession: (session_token: string) =>
     req<{ user: AuthUser }>("/api/v1/auth/session", { method: "POST", body: JSON.stringify({ session_token }) }),
   authProfile: (session_token: string, display_name: string) =>

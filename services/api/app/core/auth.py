@@ -28,7 +28,8 @@ from .db import db
 
 EMAIL_RX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 ACCOUNTS_LIB = "accounts"
-SESSION_TTL = 7 * 24 * 3600  # 7 days
+SESSION_TTL = 7 * 24 * 3600     # 7 days
+SESSION_TTL_REMEMBER = 30 * 24 * 3600  # 30 days ("remember this device")
 OTP_TTL = 600                # 10 minutes
 OTP_MAX_ATTEMPTS = 5
 
@@ -66,11 +67,13 @@ class AuthService:
             "status": m.get("status", "active"),
             "display_name": m.get("display_name", ""),
             "created": m.get("created", ""),
+            "verified": bool(m.get("verified", False)),
+            "last_login": m.get("last_login", ""),
         }
 
     @staticmethod
     def public(acct: dict) -> dict:
-        return {k: acct[k] for k in ("user_id", "email", "role", "status", "display_name", "created")}
+        return {k: acct[k] for k in ("user_id", "email", "role", "status", "display_name", "created", "verified", "last_login")}
 
     async def _count_accounts(self) -> int:
         _rows, total = await db.list(ACCOUNTS_LIB, limit=1)
@@ -96,9 +99,18 @@ class AuthService:
                 "user_id": user_id, "role": role, "status": "active",
                 "display_name": display_name.strip() or email.split("@")[0],
                 "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "verified": False,
             },
         )
-        return self.public((await self._account(email)) or {})
+        user = self.public((await self._account(email)) or {})
+        # email verification (24h code; dev-code fallback without SMTP)
+        code = f"{secrets.randbelow(900000) + 100000:06d}"
+        await cache.set("vc:" + email, self._otp_hash(email, code), ttl=86400)
+        sent = await self._send_otp_email(email, code)
+        verification = {"required": True, "expires_in": 86400}
+        if not sent:
+            verification["dev_code"] = code
+        return {"user": user, "verification": verification}
 
     async def authenticate(self, email: str, password: str) -> dict:
         email = email.strip().lower()
@@ -164,6 +176,50 @@ class AuthService:
         meta.update({"salt": rec["salt"], "iterations": rec["iterations"]})
         await db.upsert_document(_doc_id(email), ACCOUNTS_LIB, doc["title"], rec["hash"], meta=meta)
         return self.public((await self._account(email)) or {})
+
+    # --------------------------------------------------- verification ------
+    async def verify_email(self, email: str, code: str) -> dict:
+        email = email.strip().lower()
+        stored = await cache.get("vc:" + email)
+        if not stored:
+            raise AuthError("invalid or expired code — request a new one")
+        if not hmac.compare_digest(stored, self._otp_hash(email, code.strip())):
+            raise AuthError("incorrect code")
+        await cache.delete("vc:" + email)
+        doc = await db.fetch(_doc_id(email))
+        if not doc:
+            raise AuthError("account not found")
+        meta = doc.get("meta", {})
+        meta["verified"] = True
+        await db.upsert_document(_doc_id(email), ACCOUNTS_LIB, doc["title"], doc["content"], meta=meta)
+        return self.public((await self._account(email)) or {})
+
+    async def resend_verification(self, email: str) -> dict:
+        email = email.strip().lower()
+        acct = await self._account(email)
+        if not acct or acct["verified"]:
+            return {"sent": True}
+        code = f"{secrets.randbelow(900000) + 100000:06d}"
+        await cache.set("vc:" + email, self._otp_hash(email, code), ttl=86400)
+        sent = await self._send_otp_email(email, code)
+        out: dict = {"sent": True}
+        if not sent:
+            out["dev_code"] = code
+        return out
+
+    async def touch_login(self, email: str) -> None:
+        doc = await db.fetch(_doc_id(email))
+        if not doc:
+            return
+        meta = doc.get("meta", {})
+        meta["last_login"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        await db.upsert_document(_doc_id(email), ACCOUNTS_LIB, doc["title"], doc["content"], meta=meta)
+
+    async def vault_doc_count(self, user_id: str) -> int:
+        if not user_id:
+            return 0
+        _rows, total = await db.list(f"vault:{user_id}", limit=1)
+        return int(total)
 
     # ----------------------------------------------------- OTP recovery ----
     @staticmethod
