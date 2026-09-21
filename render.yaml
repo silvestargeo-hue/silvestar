@@ -45,8 +45,7 @@ services:
     startCommand: npx next start -p $PORT
     plan: free
     envVars:
+      # Render serves services at https://<name>.onrender.com (a suffix is added
+      # only if the name is taken — if so, update this value in the dashboard).
       - key: NEXT_PUBLIC_API_URL
-        fromService:
-          name: silvestar-api
-          type: web
-          property: host
+        value: https://silvestar-api.onrender.com
