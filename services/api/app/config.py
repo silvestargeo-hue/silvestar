@@ -33,6 +33,11 @@ class Settings:
     ai_primary_url: str = field(default_factory=lambda: os.getenv("AI_PRIMARY_URL", "https://text.pollinations.ai/openai"))
     ai_fallback_url: str = field(default_factory=lambda: os.getenv("AI_FALLBACK_URL", "https://text.pollinations.ai"))
     ai_model: str = field(default_factory=lambda: os.getenv("AI_MODEL", "openai"))
+    ai_api_key: str = field(default_factory=lambda: os.getenv(
+        "AI_API_KEY", os.getenv("OPENROUTER_API_KEY", os.getenv("OPENAI_API_KEY", ""))))
+    ai_failover_models: list = field(default_factory=lambda: [
+        m for m in os.getenv("AI_FAILOVER_MODELS",
+                             "nvidia/nemotron-3.5-lightning:free,z-ai/glm-5.2:free").split(",") if m])
     puter_proxy_url: str = field(default_factory=lambda: os.getenv("PUTER_PROXY_URL", ""))
     # --- Security ---
     secret_key: str = field(default_factory=lambda: os.getenv("SECRET_KEY", "silvestar-dev-secret-change-me"))

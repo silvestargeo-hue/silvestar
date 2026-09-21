@@ -24,18 +24,25 @@ class SilvestarAI:
     name = "Silvestar"
 
     async def _post_openai(self, messages: list[dict]) -> str | None:
-        try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                r = await client.post(settings.ai_primary_url, json={
-                    "model": settings.ai_model,
-                    "messages": messages,
-                    "stream": False,
-                })
-                if r.status_code == 200:
-                    data = r.json()
-                    return data["choices"][0]["message"]["content"]
-        except Exception:
-            pass
+        """OpenAI-compatible chat with auth + model failover (429/ratelimit aware)."""
+        headers = {"Content-Type": "application/json"}
+        if settings.ai_api_key:
+            headers["Authorization"] = f"Bearer {settings.ai_api_key}"
+        for model in [settings.ai_model, *settings.ai_failover_models]:
+            for attempt in range(2):  # one retry per model on transient errors
+                try:
+                    async with httpx.AsyncClient(timeout=30) as client:
+                        r = await client.post(settings.ai_primary_url, headers=headers, json={
+                            "model": model,
+                            "messages": messages,
+                            "stream": False,
+                        })
+                        if r.status_code == 200:
+                            return r.json()["choices"][0]["message"]["content"]
+                except Exception:
+                    pass
+                if attempt == 0:
+                    await __import__("asyncio").sleep(1.5)
         return None
 
     async def _get_completion(self, prompt: str) -> str | None:
