@@ -8,24 +8,34 @@ import { VaultView } from "@/components/VaultView";
 import { AskView } from "@/components/AskView";
 import { RoomsView } from "@/components/RoomsView";
 import { GraphView } from "@/components/GraphView";
+import { UserPanel } from "@/components/UserPanel";
+import { AdminPanel } from "@/components/AdminPanel";
+import { Shell, type NavTab } from "@/components/Shell";
+import { CommandPalette, type Cmd } from "@/components/CommandPalette";
+import { useOnline } from "@/lib/kit";
 import "./lock.css";
 
-type Tab = "ask" | "archive" | "vault" | "rooms" | "graph";
+type Tab = "panel" | "ask" | "archive" | "vault" | "rooms" | "graph" | "admin";
 
-const TABS: { id: Tab; label: string }[] = [
-  { id: "ask", label: "🤖 Ask Silvestar" },
-  { id: "archive", label: "📚 Archive" },
-  { id: "vault", label: "🔒 Vault" },
-  { id: "rooms", label: "🎙 Rooms" },
-  { id: "graph", label: "🕸 Graph" },
+const TABS: NavTab[] = [
+  { id: "panel", label: "Dashboard", icon: "🏠" },
+  { id: "ask", label: "Ask Silvestar", icon: "🤖" },
+  { id: "archive", label: "Archive", icon: "📚" },
+  { id: "vault", label: "Vault", icon: "🔒" },
+  { id: "rooms", label: "Rooms", icon: "🎙" },
+  { id: "graph", label: "Graph", icon: "🕸" },
+  { id: "admin", label: "Admin", icon: "🛡" },
 ];
 
 export default function Home() {
-  const [tab, setTab] = useState<Tab>("ask");
+  const [tab, setTab] = useState<Tab>("panel");
   const [health, setHealth] = useState<Health | null>(null);
   const [sessionToken, setSessionToken] = useState<string | null>(null); // null = locked
   const [checked, setChecked] = useState(false);
+  const [adminEnabled, setAdminEnabled] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [userId] = useState(() => "u-" + Math.random().toString(36).slice(2, 9));
+  const online = useOnline();
 
   const refreshHealth = useCallback(async () => {
     try {
@@ -38,83 +48,121 @@ export default function Home() {
   useEffect(() => {
     refreshHealth();
     const t = setInterval(refreshHealth, 30000);
-    const c = setTimeout(() => setChecked(true), 600); // let health probe settle
+    const c = setTimeout(() => setChecked(true), 600);
+    setAdminEnabled(!!localStorage.getItem("sv-admin-key"));
     return () => {
       clearInterval(t);
       clearTimeout(c);
     };
   }, [refreshHealth]);
 
-  const unlocked = sessionToken !== null;
+  // global shortcuts: Ctrl+K palette, g+tab quick nav
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((o) => !o);
+      }
+    };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, []);
 
-  const modeBadge = (label: string, mode: string | undefined, ok: boolean | undefined) => (
-    <span className={`badge ${ok ? "ok" : "err"}`} title={`mode: ${mode ?? "n/a"}`}>
-      {label}: {mode ?? "offline"}
-    </span>
-  );
+  const unlock = (t: string) => {
+    setSessionToken(t || ""); // "" = guest mode
+  };
+
+  const enableAdmin = () => {
+    const k = prompt("Admin key:");
+    if (k === null) return;
+    if (k) {
+      localStorage.setItem("sv-admin-key", k);
+      setAdminEnabled(true);
+      setTab("admin");
+    } else {
+      localStorage.removeItem("sv-admin-key");
+      setAdminEnabled(false);
+    }
+  };
+
+  const commands: Cmd[] = [
+    ...TABS.filter((t) => t.id !== "admin" || adminEnabled).map((t) => ({
+      id: "go-" + t.id,
+      icon: t.icon,
+      label: "Go to " + t.label,
+      run: () => setTab(t.id as Tab),
+    })),
+    {
+      id: "admin-toggle",
+      icon: "🛡",
+      label: adminEnabled ? "Disable admin mode" : "Enable admin mode",
+      run: enableAdmin,
+    },
+    {
+      id: "lock-vault",
+      icon: "🔒",
+      label: "Lock vault session",
+      run: async () => {
+        if (sessionToken) {
+          try {
+            await api.vaultLock(userId, sessionToken);
+          } catch { /* token may be stateless-expired */ }
+          setSessionToken("");
+        }
+      },
+    },
+    {
+      id: "copy-api",
+      icon: "🔗",
+      label: "Copy API base URL",
+      run: () => navigator.clipboard.writeText(process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"),
+    },
+  ];
+
+  const visibleTabs = TABS.filter((t) => t.id !== "admin" || adminEnabled);
 
   return (
-    <div className="app">
-      {!unlocked && checked && (
-        <LockScreen
-          userId={userId}
-          onUnlock={(t) => setSessionToken(t || "")} // "" = guest mode
-        />
+    <div>
+      {!online && <div className="offbanner">⚠ You are offline — showing cached content</div>}
+
+      {!sessionToken && checked && (
+        <LockScreen userId={userId} onUnlock={unlock} />
       )}
 
-      <header className="top">
-        <div style={{ flex: "1 1 100%" }}>
-          <h1>⭐ Silvestar Platform</h1>
-          <div className="sub">
-            Archive Library · Personal Vault · cross-library RAG · realtime rooms · knowledge graph · Silvestar AI
-          </div>
-        </div>
-        <div className="row" style={{ flex: "1 1 100%" }}>
-          {health ? (
-            <>
-              {modeBadge("db", health.db?.mode, health.db?.ok)}
-              {modeBadge("cache", health.cache?.mode, health.cache?.ok)}
-              {modeBadge("graph", health.graph?.mode, health.graph?.ok)}
-              <span className={`badge ${health.ai?.primary_reachable ? "ok" : ""}`}>
-                ai: {health.ai?.assistant ?? "—"}
+      <div style={{ filter: sessionToken !== null ? undefined : "blur(6px)", pointerEvents: sessionToken !== null ? undefined : "none", minHeight: "100vh" }}>
+        <Shell
+          tabs={visibleTabs}
+          active={tab}
+          onNavigate={(id) => setTab(id as Tab)}
+          headerExtra={
+            health ? (
+              <span className={`badge ${health.ai?.primary_reachable ? "ok" : "err"}`}>
+                ● {health.ai?.assistant ?? "AI"} {health.ai?.primary_reachable ? "online" : "offline"}
               </span>
-              <span className={`badge ${health.livekit?.enabled ? "ok" : ""}`}>
-                livekit: {health.livekit?.enabled ? "on" : "p2p"}
-              </span>
-              {sessionToken ? (
-                <span className="badge ok">vault: unlocked</span>
-              ) : (
-                <span className="badge">vault: guest</span>
-              )}
-            </>
-          ) : (
-            <span className="badge err">api: offline</span>
+            ) : (
+              <span className="badge err">● api offline</span>
+            )
+          }
+        >
+          {tab === "panel" && (
+            <UserPanel
+              userId={userId}
+              sessionToken={sessionToken ?? ""}
+              onNavigate={(id) => setTab(id as Tab)}
+            />
           )}
-        </div>
-      </header>
-
-      <div className="tabs">
-        {TABS.map((t) => (
-          <button key={t.id} className={tab === t.id ? "active" : ""} onClick={() => setTab(t.id)}>
-            {t.label}
-          </button>
-        ))}
+          {tab === "ask" && <AskView userId={userId} sessionToken={sessionToken ?? ""} />}
+          {tab === "archive" && <ArchiveView userId={userId} sessionToken={sessionToken ?? ""} />}
+          {tab === "vault" && (
+            <VaultView userId={userId} sessionToken={sessionToken ?? ""} onUnlock={setSessionToken} />
+          )}
+          {tab === "rooms" && <RoomsView userId={userId} />}
+          {tab === "graph" && <GraphView />}
+          {tab === "admin" && adminEnabled && <AdminPanel />}
+        </Shell>
       </div>
 
-      <main style={{ filter: unlocked ? undefined : "blur(6px)", pointerEvents: unlocked ? undefined : "none" }}>
-        {tab === "ask" && <AskView userId={userId} sessionToken={sessionToken ?? ""} />}
-        {tab === "archive" && <ArchiveView userId={userId} sessionToken={sessionToken ?? ""} />}
-        {tab === "vault" && (
-          <VaultView userId={userId} sessionToken={sessionToken ?? ""} onUnlock={setSessionToken} />
-        )}
-        {tab === "rooms" && <RoomsView userId={userId} />}
-        {tab === "graph" && <GraphView />}
-      </main>
-
-      <footer className="pf">
-        Silvestar Platform · cross-library RAG · AES-256-GCM vault · WebSockets
-        {health?.livekit?.enabled ? " + LiveKit" : " (P2P signaling)"} · graph
-      </footer>
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} commands={commands} />
     </div>
   );
 }

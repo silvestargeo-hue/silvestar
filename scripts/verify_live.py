@@ -18,15 +18,24 @@ BASE = "http://127.0.0.1:8123"
 results: list[tuple[str, bool, str]] = []
 
 
-def call(method: str, path: str, payload: dict | None = None, timeout: int = 90):
+def call(method: str, path: str, payload: dict | None = None, timeout: int = 90, headers: dict | None = None):
+    h = {"Content-Type": "application/json", **(headers or {})}
     req = urllib.request.Request(
         BASE + path,
         data=json.dumps(payload).encode() if payload is not None else None,
-        headers={"Content-Type": "application/json"},
+        headers=h,
         method=method,
     )
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode())
+
+
+def _status(method: str, path: str) -> int:
+    try:
+        call(method, path, None, timeout=10)
+        return 200
+    except urllib.error.HTTPError as e:
+        return e.code
 
 
 def check(name: str, fn):
@@ -109,6 +118,19 @@ def main() -> int:
         "id": "n-live", "label": "LiveNode"})["id"])
     check("graph neighbors", lambda: json.dumps(call(
         "GET", "/api/v1/graph/neighbors/n-live"))[:100])
+
+    # --- Modules 10-11: admin + user panels ---
+    admin = {"x-admin-key": os.environ.get("SILVESTAR_ADMIN_KEY", "silvestar-admin")}
+    check("admin overview", lambda: json.dumps(call("GET", "/api/v1/admin/overview", None, headers=admin))[:120])
+    check("admin auth rejected", lambda: (_ for _ in ()).throw(AssertionError("expected 403"))
+          if _status("GET", "/api/v1/admin/overview") != 403 else "403 without key ✓")
+    check("admin model switch", lambda: call("POST", "/api/v1/admin/ai/model",
+          {"model": "nvidia/nemotron-3.5-lightning:free"}, headers=admin)["active_model"])
+    check("admin doc publish", lambda: call("POST", "/api/v1/admin/documents", {
+        "title": "Admin Notice", "content": "Posted via admin panel."}, headers=admin)["id"])
+    check("admin cache clear", lambda: call("POST", "/api/v1/admin/cache/clear", {}, headers=admin)["cleared"])
+    check("user stats", lambda: json.dumps(call(
+        "GET", "/api/v1/me/stats?user_id=liveuser&session_token=" + token))[:120])
 
     server.should_exit = True
     t.join(timeout=5)

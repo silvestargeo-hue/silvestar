@@ -3,8 +3,8 @@ export const API_URL: string =
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_URL}${path}`, {
-    headers: { "Content-Type": "application/json" },
     ...init,
+    headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
   });
   if (!res.ok) {
     let detail = res.statusText;
@@ -124,4 +124,32 @@ export const api = {
     }),
   graphPath: (src: string, dst: string) =>
     req<{ path: string[] }>(`/api/v1/graph/path?src=${encodeURIComponent(src)}&dst=${encodeURIComponent(dst)}`),
+
+  // ---- Modules 10-11: user panel + admin panel ----
+  meStats: (user_id: string, session_token = "") =>
+    req<{
+      user_id: string; vault_unlocked: boolean; vault_documents: number;
+      archive_documents: number; recent_archive: { id: string; title: string }[];
+      ai: { assistant: string; reachable: boolean };
+    }>(`/api/v1/me/stats?user_id=${encodeURIComponent(user_id)}&session_token=${encodeURIComponent(session_token)}`),
+
+  adminOverview: () =>
+    req<Record<string, any>>("/api/v1/admin/overview", { headers: adminHeaders() }),
+  adminAddDoc: (title: string, content: string, tags: string[] = []) =>
+    req<Record<string, any>>("/api/v1/admin/documents", {
+      method: "POST", headers: adminHeaders(), body: JSON.stringify({ title, content, tags }),
+    }),
+  adminDeleteDoc: (id: string) =>
+    req<{ deleted: boolean }>(`/api/v1/admin/documents/${id}`, { method: "DELETE", headers: adminHeaders() }),
+  adminCacheClear: () =>
+    req<{ cleared: boolean }>("/api/v1/admin/cache/clear", { method: "POST", headers: adminHeaders() }),
+  adminSetModel: (model: string) =>
+    req<{ active_model: string; persisted: boolean }>("/api/v1/admin/ai/model", {
+      method: "POST", headers: adminHeaders(), body: JSON.stringify({ model }),
+    }),
 };
+
+function adminHeaders(): Record<string, string> {
+  const k = typeof window !== "undefined" ? localStorage.getItem("sv-admin-key") || "" : "";
+  return k ? { "x-admin-key": k } : {};
+}
