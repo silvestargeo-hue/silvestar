@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { passwordStrength, downloadFile, toast } from "@/lib/kit";
 
 export function VaultView({
   userId,
@@ -18,8 +19,22 @@ export function VaultView({
   const [content, setContent] = useState("");
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
+  const [expiresAt, setExpiresAt] = useState<number | null>(null);
+  const [now, setNow] = useState(Date.now() / 1000);
 
   const unlocked = Boolean(sessionToken);
+  const strength = passwordStrength(password);
+
+  // session countdown (30-minute TTL)
+  useEffect(() => {
+    if (!unlocked) { setExpiresAt(null); return; }
+    setExpiresAt(Date.now() / 1000 + 30 * 60);
+    const t = setInterval(() => setNow(Date.now() / 1000), 1000);
+    return () => clearInterval(t);
+  }, [unlocked]);
+
+  const remaining = expiresAt ? Math.max(0, Math.floor(expiresAt - now)) : null;
+  const mmss = remaining !== null ? `${String(Math.floor(remaining / 60)).padStart(2, "0")}:${String(remaining % 60).padStart(2, "0")}` : "";
 
   const refresh = async (token: string) => {
     try {
@@ -75,7 +90,7 @@ export function VaultView({
   const add = async () => {
     if (!title.trim() || !content.trim()) return;
     const r = await api.vaultAdd(userId, sessionToken, title.trim(), content.trim());
-    setMsg(`Sealed ✓ fingerprint ${r.fingerprint}`);
+    toast(`Sealed ✓ fingerprint ${r.fingerprint.slice(0, 12)}…`, "ok");
     setTitle("");
     setContent("");
     await refresh(sessionToken);
@@ -83,7 +98,13 @@ export function VaultView({
 
   const remove = async (id: string) => {
     await api.vaultDelete(id, userId, sessionToken);
+    toast("Shredded", "ok");
     await refresh(sessionToken);
+  };
+
+  const backupTitles = () => {
+    downloadFile(`vault-manifest-${userId}.json`, JSON.stringify({ user_id: userId, exported: new Date().toISOString(), documents: docs }, null, 2));
+    toast("Manifest exported (titles only — never plaintext)", "ok");
   };
 
   return (
@@ -91,12 +112,19 @@ export function VaultView({
       <div className="card">
         <h2>🔒 Personal Vault {unlocked ? "— UNLOCKED" : "— LOCKED"}</h2>
         <div className="hint">
-          AES-256-GCM encryption, PBKDF2-derived per-user key, session auto-expires in 30 min.
+          AES-256-GCM encryption, PBKDF2-derived per-user key.
           Content is sealed at rest — the API never returns plaintext listings.
         </div>
+
+        {unlocked && remaining !== null && (
+          <div className={`badge ${remaining < 300 ? "err" : "ok"}`} style={{ marginBottom: 10, display: "inline-block" }}>
+            ⏳ session expires in {mmss}
+          </div>
+        )}
+
         {!unlocked ? (
           <>
-            <div className="row" style={{ marginBottom: 8 }}>
+            <div className="row" style={{ marginBottom: 4 }}>
               <input
                 type="password"
                 value={password}
@@ -105,7 +133,13 @@ export function VaultView({
                 onKeyDown={(e) => e.key === "Enter" && unlock()}
               />
             </div>
-            <div className="row">
+            {password && (
+              <div>
+                <div className="meter"><div style={{ width: `${(strength.score / 5) * 100}%`, background: strength.color }} /></div>
+                <div className="hint">strength: {strength.label}</div>
+              </div>
+            )}
+            <div className="row" style={{ marginTop: 8 }}>
               <button onClick={create} disabled={busy || password.length < 8}>Create vault</button>
               <button className="ghost" onClick={unlock} disabled={busy || password.length < 8}>Unlock</button>
             </div>
@@ -113,6 +147,7 @@ export function VaultView({
         ) : (
           <div className="row">
             <button className="danger" onClick={lock}>Lock vault</button>
+            <button className="ghost" onClick={backupTitles}>⬇ Export manifest</button>
           </div>
         )}
         {msg && <div className="hint">{msg}</div>}

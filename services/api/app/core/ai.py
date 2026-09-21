@@ -86,6 +86,19 @@ class SilvestarAI:
         top = [b for _, b in scored[:3]]
         return "Based on the library context:\n\n" + "\n\n".join(top)
 
+    async def summarize(self, instruction: str, corpus: str) -> dict:
+        """Digest/summary over a provided corpus via the engine chain + local fallback."""
+        messages = [
+            {"role": "system", "content": "You are Silvestar, summarizing library documents. Be concise; use short bullet points."},
+            {"role": "user", "content": instruction + "\n\n" + corpus[:12000]},
+        ]
+        answer = await self._post_openai(messages)
+        engine = "openai-compatible"
+        if not answer:
+            answer = self._local_extractive(instruction, corpus[:4000])
+            engine = "local-extractive"
+        return {"summary": answer, "engine": engine}
+
     async def chat(self, question: str, user_id: str = "anon", vault_session_token: str = "",
                    history: list[dict] | None = None) -> dict:
         t0 = time.time()

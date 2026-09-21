@@ -439,3 +439,98 @@ async def me_stats(user_id: str = Query(...), session_token: str = Query("")):
         "recent_archive": [{"id": d["id"], "title": d["title"]} for d in recent],
         "ai": {"assistant": ai_h.get("assistant"), "reachable": ai_h.get("primary_reachable")},
     }
+
+
+# ----------------------------------------- Module 4+: library power tools ---
+class ImportIn(BaseModel):
+    documents: list[DocIn] = Field(default_factory=list)
+
+
+class RevisionIn(BaseModel):
+    title: str
+    content: str
+
+
+@app.get("/api/v1/archive/export")
+async def archive_export():
+    docs, _total = await db.list("archive", limit=1000)
+    return {"format": "silvestar-archive-v1", "count": len(docs), "documents": docs}
+
+
+@app.post("/api/v1/archive/import")
+async def archive_import(body: ImportIn):
+    import uuid
+
+    added: list[str] = []
+    for d in body.documents[:500]:
+        doc_id = "a-" + uuid.uuid4().hex[:12]
+        await db.upsert_document(doc_id, "archive", d.title, d.content,
+                                 meta={"source": "import", "tags": d.tags})
+        added.append(doc_id)
+    await cache.delete("archive:stats")
+    return {"imported": len(added), "ids": added}
+
+
+@app.get("/api/v1/archive/rss")
+async def archive_rss():
+    from fastapi.responses import Response
+
+    docs, _ = await db.list("archive", limit=50)
+
+    def _x(s: str) -> str:
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    items = "".join(
+        f"<item><title>{_x(d['title'])}</title>"
+        f"<description>{_x(d.get('snippet', '')[:300])}</description></item>"
+        for d in docs
+    )
+    xml = ("<?xml version=\"1.0\"?><rss version=\"2.0\"><channel>"
+           "<title>Silvestar Archive</title><link>/</link>"
+           "<description>Latest documents in the public archive</description>"
+           f"{items}</channel></rss>")
+    return Response(content=xml, media_type="application/rss+xml")
+
+
+@app.get("/api/v1/archive/related/{doc_id}")
+async def archive_related(doc_id: str, limit: int = Query(4, ge=1, le=10)):
+    doc = await db.fetch(doc_id)
+    if not doc or doc["library"] != "archive":
+        raise HTTPException(404, "archive document not found")
+    hits = await db.search("archive", doc["title"], limit=limit + 1)
+    return {"related": [{"id": h["id"], "title": h["title"],
+                         "snippet": h["content"][:160], "score": h["score"]}
+                        for h in hits if h["id"] != doc_id][:limit]}
+
+
+@app.post("/api/v1/archive/digest")
+async def archive_digest(limit: int = Query(10, ge=1, le=30)):
+    docs, _ = await db.list("archive", limit=limit)
+    if not docs:
+        return {"summary": "The archive is empty — nothing to digest.", "engine": "none", "count": 0}
+    corpus = "\n\n".join(f"## {d['title']}\n{d.get('snippet', '')[:280]}" for d in docs)
+    r = await ai.summarize(f"Digest these {len(docs)} archive documents into key themes and a brief bullet summary.", corpus)
+    return {**r, "count": len(docs), "digested": [{"id": d["id"], "title": d["title"]} for d in docs]}
+
+
+@app.put("/api/v1/archive/documents/{doc_id}")
+async def archive_update(doc_id: str, body: RevisionIn):
+    """Update a document; the previous content is snapshotted as a version."""
+    old = await db.fetch(doc_id)
+    if not old or old["library"] != "archive":
+        raise HTTPException(404, "archive document not found")
+    import uuid
+
+    await db.upsert_document("r-" + uuid.uuid4().hex[:10], f"archive-versions:{doc_id}",
+                             old["title"], old["content"], meta={"source": "revision"})
+    saved = await db.upsert_document(doc_id, "archive", body.title, body.content,
+                                     meta={"source": "web-ui", "revised": True})
+    await cache.delete("archive:stats")
+    return saved
+
+
+@app.get("/api/v1/archive/documents/{doc_id}/versions")
+async def archive_versions(doc_id: str):
+    rows, _ = await db.list(f"archive-versions:{doc_id}", limit=50)
+    return {"doc_id": doc_id,
+            "versions": [{"id": r["id"], "title": r["title"], "snippet": r.get("snippet", "")} for r in rows]}

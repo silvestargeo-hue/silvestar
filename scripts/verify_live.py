@@ -32,8 +32,9 @@ def call(method: str, path: str, payload: dict | None = None, timeout: int = 90,
 
 def _status(method: str, path: str) -> int:
     try:
-        call(method, path, None, timeout=10)
-        return 200
+        req = urllib.request.Request(BASE + path, method=method)
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return r.status
     except urllib.error.HTTPError as e:
         return e.code
 
@@ -118,6 +119,20 @@ def main() -> int:
         "id": "n-live", "label": "LiveNode"})["id"])
     check("graph neighbors", lambda: json.dumps(call(
         "GET", "/api/v1/graph/neighbors/n-live"))[:100])
+
+    # --- Module 4+: power tools ---
+    rel_id = call("POST", "/api/v1/archive/documents", {
+        "title": "Power Tools Doc", "content": "Related documents and versioning test doc.",
+        "user_id": "anon"}).get("id") or call("GET", "/api/v1/archive/search?q=Power+Tools")["results"][0]["doc_id"]
+    check("archive export", lambda: call("GET", "/api/v1/archive/export")["format"])
+    check("archive import", lambda: call("POST", "/api/v1/archive/import", {
+        "documents": [{"title": "Imported Doc", "content": "bulk import works"}]})["imported"])
+    check("archive rss", lambda: "rss ✓" if _status("GET", "/api/v1/archive/rss") == 200 else "rss missing")
+    check("related docs", lambda: f"{len(call('GET', '/api/v1/archive/related/' + rel_id)['related'])} related")
+    check("doc update", lambda: call("PUT", "/api/v1/archive/documents/" + rel_id, {
+        "title": "Power Tools Doc v2", "content": "updated content"})["id"])
+    check("version history", lambda: f"{len(call('GET', '/api/v1/archive/documents/' + rel_id + '/versions')['versions'])} version(s)")
+    check("ai digest", lambda: call("POST", "/api/v1/archive/digest?limit=3", None)["engine"])
 
     # --- Modules 10-11: admin + user panels ---
     admin = {"x-admin-key": os.environ.get("SILVESTAR_ADMIN_KEY", "silvestar-admin")}

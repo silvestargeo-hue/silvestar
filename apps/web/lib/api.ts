@@ -125,6 +125,18 @@ export const api = {
   graphPath: (src: string, dst: string) =>
     req<{ path: string[] }>(`/api/v1/graph/path?src=${encodeURIComponent(src)}&dst=${encodeURIComponent(dst)}`),
 
+  // ---- power tools ----
+  archiveExport: () =>
+    req<{ format: string; count: number; documents: { id: string; title: string; content: string }[] }>("/api/v1/archive/export"),
+  archiveImport: (docs: { title: string; content: string }[]) =>
+    req<{ imported: number }>("/api/v1/archive/import", { method: "POST", body: JSON.stringify({ documents: docs }) }),
+  relatedDocs: (doc_id: string) =>
+    req<{ related: { id: string; title: string; snippet: string; score: number }[] }>(`/api/v1/archive/related/${doc_id}`),
+  archiveDigest: () =>
+    req<{ summary: string; engine: string; count: number }>("/api/v1/archive/digest", { method: "POST" }),
+  docVersions: (doc_id: string) =>
+    req<{ versions: { id: string; title: string; snippet: string }[] }>(`/api/v1/archive/documents/${doc_id}/versions`),
+
   // ---- Modules 10-11: user panel + admin panel ----
   meStats: (user_id: string, session_token = "") =>
     req<{

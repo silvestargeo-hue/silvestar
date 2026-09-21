@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { api, type AskResult } from "@/lib/api";
+import { speak, useSpeechInput, useTypewriter, copyText, toast } from "@/lib/kit";
 
 export function AskView({ userId, sessionToken }: { userId: string; sessionToken: string }) {
   const [question, setQuestion] = useState("");
@@ -9,6 +10,10 @@ export function AskView({ userId, sessionToken }: { userId: string; sessionToken
   const [history, setHistory] = useState<{ role: string; content: string }[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [tts, setTts] = useState(false);
+  const { listening, start, supported: sttSupported } = useSpeechInput((t) => {
+    setQuestion(t);
+  });
 
   const ask = async () => {
     const q = question.trim();
@@ -20,12 +25,15 @@ export function AskView({ userId, sessionToken }: { userId: string; sessionToken
       setResult(r);
       setHistory((h) => [...h.slice(-6), { role: "user", content: q }, { role: "assistant", content: r.answer }]);
       setQuestion("");
+      if (tts) speak(r.answer);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
   };
+
+  const displayed = useTypewriter(result?.answer ?? "", 12);
 
   return (
     <div>
@@ -38,10 +46,15 @@ export function AskView({ userId, sessionToken }: { userId: string; sessionToken
         <div className="row">
           <input
             value={question}
-            placeholder="Ask anything — grounded in your libraries…"
+            placeholder={listening ? "Listening…" : "Ask anything — grounded in your libraries…"}
             onChange={(e) => setQuestion(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && ask()}
           />
+          {sttSupported && (
+            <button className="ghost" onClick={start} title="Voice input" disabled={busy}>
+              {listening ? <span className="spin">🎙</span> : "🎙"}
+            </button>
+          )}
           <button onClick={ask} disabled={busy}>{busy ? "Thinking…" : "Ask"}</button>
         </div>
         {error && <div className="hint" style={{ color: "var(--err)" }}>{error}</div>}
@@ -50,13 +63,21 @@ export function AskView({ userId, sessionToken }: { userId: string; sessionToken
       {result && (
         <div className="card">
           <div className="row" style={{ justifyContent: "space-between" }}>
-            <span>
+            <span style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
               <span className="tag">engine: {result.engine}</span>{" "}
               <span className="tag">{result.latency_ms} ms</span>{" "}
               {result.vault_unlocked ? <span className="tag vault">vault included</span> : null}
             </span>
+            <span style={{ display: "flex", gap: 6 }}>
+              <button className="mini" onClick={() => { copyText(result.answer); toast("Answer copied", "ok"); }}>
+                📋 Copy
+              </button>
+              <button className="mini" onClick={() => { setTts(!tts); speak(result.answer, !tts); }}>
+                {tts ? "🔇 Mute" : "🔊 Speak"}
+              </button>
+            </span>
           </div>
-          <p style={{ whiteSpace: "pre-wrap", lineHeight: 1.55 }}>{result.answer}</p>
+          <p style={{ whiteSpace: "pre-wrap", lineHeight: 1.55 }}>{displayed}</p>
           {result.citations.length > 0 && (
             <>
               <div className="hint">Sources</div>
