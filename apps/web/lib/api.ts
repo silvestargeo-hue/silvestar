@@ -1,5 +1,9 @@
-export const API_URL: string =
+const RAW_API_URL: string =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+// tolerate hosts without a scheme (e.g. Render fromService host)
+export const API_URL: string = RAW_API_URL.startsWith("http")
+  ? RAW_API_URL
+  : `https://${RAW_API_URL}`;
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_URL}${path}`, {

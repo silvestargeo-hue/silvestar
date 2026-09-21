@@ -1,5 +1,8 @@
-# Render blueprint — deploy API + Web with one click from the repo.
-# Push this repo to GitHub, then: render.com → New → Blueprint → select repo.
+# Render Blueprint — one-click production deploy.
+# Deploy: https://render.com/deploy?repo=https://github.com/silvestargeo-hue/silvestar
+# You'll be asked for two secrets at setup:
+#   AI_API_KEY          → your OpenRouter key (sk-or-v1-...)
+#   SILVESTAR_ADMIN_KEY → any strong passphrase for the Admin Panel
 databases:
   - name: silvestar-db
     databaseName: silvestar
@@ -12,13 +15,25 @@ services:
     rootDir: services/api
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers
-    healthCheckPath: /health
+    healthCheckPath: /api/v1/health
     plan: free
     envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: silvestar-db
+          property: connectionString
       - key: SILVESTAR_SECRET
         generateValue: true
       - key: SILVESTAR_ADMIN_KEY
-        generateValue: true
+        sync: false
+      - key: AI_PRIMARY_URL
+        value: https://openrouter.ai/api/v1/chat/completions
+      - key: AI_MODEL
+        value: nex-agi/nex-n2.5-mini:free
+      - key: AI_FAILOVER_MODELS
+        value: nvidia/nemotron-3.5-lightning:free,z-ai/glm-5.2:free
+      - key: AI_API_KEY
+        sync: false
       - key: PYTHON_VERSION
         value: "3.12"
 
@@ -27,8 +42,11 @@ services:
     runtime: node
     rootDir: apps/web
     buildCommand: npm install && npm run build
-    startCommand: npm start
+    startCommand: npx next start -p $PORT
     plan: free
     envVars:
       - key: NEXT_PUBLIC_API_URL
-        value: https://silvestar-api.onrender.com
+        fromService:
+          name: silvestar-api
+          type: web
+          property: host
