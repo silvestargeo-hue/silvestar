@@ -59,6 +59,9 @@ class Settings:
     smtp_password: str = field(default_factory=lambda: os.getenv("SMTP_PASSWORD", ""))
     smtp_from: str = field(default_factory=lambda: os.getenv("SMTP_FROM", ""))
     smtp_tls: bool = field(default_factory=lambda: os.getenv("SMTP_TLS", "1") not in ("0", "false", "no"))
+    # Resend HTTPS API (preferred when set; overrides SMTP)
+    resend_api_key: str = field(default_factory=lambda: os.getenv("RESEND_API_KEY", ""))
+    resend_from: str = field(default_factory=lambda: os.getenv("RESEND_FROM", "Silvestar <onboarding@resend.dev>"))
     vault_kdf_iterations: int = field(default_factory=lambda: int(os.getenv("VAULT_KDF_ITERATIONS", "200000")))
     # --- Misc ---
     cors_origins: list = field(default_factory=lambda: [

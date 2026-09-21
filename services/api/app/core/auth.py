@@ -261,6 +261,34 @@ class AuthService:
         return out
 
     async def _send_otp_email(self, email: str, code: str) -> bool:
+        # 1) Resend HTTPS API (preferred when configured)
+        if settings.resend_api_key:
+            try:
+                import httpx
+
+                r = await httpx.AsyncClient(timeout=15).post(
+                    "https://api.resend.com/emails",
+                    headers={"Authorization": f"Bearer {settings.resend_api_key}"},
+                    json={
+                        "from": settings.resend_from,
+                        "to": [email],
+                        "subject": "Silvestar — your verification code",
+                        "html": (
+                            "<div style=\"font-family:sans-serif;max-width:420px;margin:auto;padding:24px;\">"
+                            "<h2 style=\"color:#4f46e5;\">Silvestar</h2>"
+                            "<p>Your verification code is:</p>"
+                            f"<p style=\"font-size:28px;letter-spacing:6px;font-weight:bold;\">{code}</p>"
+                            "<p style=\"color:#888;\">It expires in 10 minutes. If you didn't request it, ignore this email.</p>"
+                            "</div>"
+                        ),
+                    },
+                )
+                if r.status_code == 200:
+                    return True
+                print("[email] resend rejected:", r.status_code, r.text[:120])
+            except Exception as e:
+                print("[email] resend failed:", repr(e))
+        # 2) Classic SMTP fallback
         if not settings.smtp_host:
             return False
         try:
@@ -270,8 +298,8 @@ class AuthService:
             msg = EmailMessage()
             msg["From"] = settings.smtp_from or "silvestar@noreply.local"
             msg["To"] = email
-            msg["Subject"] = "Silvestar — password reset code"
-            msg.set_content(f"Your Silvestar password reset code is {code}\nIt expires in 10 minutes.")
+            msg["Subject"] = "Silvestar — your verification code"
+            msg.set_content(f"Your Silvestar verification code is {code}\nIt expires in 10 minutes.")
 
             def _send() -> None:
                 with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10) as s:
