@@ -13,7 +13,10 @@ import time
 import urllib.error
 import urllib.request
 
-BASE = "http://127.0.0.1:8123"
+# Point SILVESTAR_BASE_URL at a deployed instance to verify production,
+# or leave unset to boot the local API in-process.
+BASE = os.environ.get("SILVESTAR_BASE_URL", "http://127.0.0.1:8123").rstrip("/")
+LOCAL = "127.0.0.1" in BASE
 
 results: list[tuple[str, bool, str]] = []
 
@@ -55,12 +58,15 @@ def check(name: str, fn):
 
 
 def main() -> int:
-    import uvicorn  # noqa: PLC0415
+    server = None
+    thread = None
+    if LOCAL:
+        import uvicorn  # noqa: PLC0415
 
-    cfg = uvicorn.Config("app.main:app", host="127.0.0.1", port=8123, log_level="warning")
-    server = uvicorn.Server(cfg)
-    t = threading.Thread(target=server.run, daemon=True)
-    t.start()
+        cfg = uvicorn.Config("app.main:app", host="127.0.0.1", port=8123, log_level="warning")
+        server = uvicorn.Server(cfg)
+        thread = threading.Thread(target=server.run, daemon=True)
+        thread.start()
 
     for _ in range(40):
         try:
@@ -156,8 +162,9 @@ def main() -> int:
     check("admin audit", lambda: f"{call('GET', '/api/v1/admin/audit', None, headers=admin)['total']} entries")
     check("admin backup", lambda: call("GET", "/api/v1/admin/backup", None, headers=admin)["format"])
 
-    server.should_exit = True
-    t.join(timeout=5)
+    if server and thread:
+        server.should_exit = True
+        thread.join(timeout=5)
 
     print("\n══════ LIVE VERIFICATION ══════")
     fails = 0
