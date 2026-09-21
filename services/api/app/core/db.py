@@ -71,12 +71,17 @@ class Database:
                 import asyncpg  # type: ignore
 
                 self._pg_pool = await asyncpg.create_pool(
-                    settings.database_url, min_size=1, max_size=8, command_timeout=30
+                    settings.database_url,
+                    min_size=1,
+                    max_size=8,
+                    command_timeout=30,
+                    statement_cache_size=0,  # required behind pgbouncer (Supabase/Vercel poolers)
                 )
                 await self._pg_init_schema()
                 self.mode = "postgres+pgvector"
                 return
-            except Exception:
+            except Exception as e:  # pragma: no cover - surfaced in server logs
+                print("[db] postgres init failed, falling back to sqlite:", repr(e))
                 self._pg_pool = None
         await self._sqlite_init()
         self.mode = "embedded-sqlite"

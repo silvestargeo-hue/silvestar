@@ -18,7 +18,12 @@ class Settings:
     version: str = "1.0.0"
 
     # --- Module 3/4: database (pgvector) ---
-    database_url: str = field(default_factory=lambda: os.getenv("DATABASE_URL", ""))
+    database_url: str = field(
+        default_factory=lambda: os.getenv("DATABASE_URL")
+        or os.getenv("POSTGRES_URL_NON_POOLING")
+        or os.getenv("POSTGRES_URL")
+        or ""
+    )
     # --- Module 8: cache ---
     redis_url: str = field(default_factory=lambda: os.getenv("REDIS_URL", ""))
     # --- Module 7: graph ---
