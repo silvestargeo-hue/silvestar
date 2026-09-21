@@ -54,6 +54,7 @@ export function NotificationCenter({ userId, open, onClose, onChanged }: {
     } catch (e) { toast(String(e), "err"); }
   };
 
+  if (!open) return null; // never render when closed (same bug as the shortcuts overlay)
   return (
     <Modal title="🔔 Notifications" onClose={onClose}>
       <div className="row" style={{ marginBottom: 12 }}>
