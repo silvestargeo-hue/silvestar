@@ -829,7 +829,9 @@ async def admin_users(request: Request):
     rows, total = await db.list(ACCOUNTS_LIB, limit=500)
     users = []
     for r in rows:
-        m = r.get("meta", {})
+        # db.list rows carry only id/title/snippet — fetch the full record for meta
+        doc = await db.fetch(r["id"])
+        m = (doc or r).get("meta", {})
         users.append({
             "email": r["id"].split("::", 1)[1],
             "user_id": m.get("user_id", ""),
