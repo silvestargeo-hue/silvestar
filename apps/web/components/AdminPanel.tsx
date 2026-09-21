@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { StatTile, Chip } from "./Stat";
 import { toast, timeAgo, downloadFile } from "@/lib/kit";
+import type { AuthUser } from "@/lib/api";
 
 type Overview = {
   archive_documents: number;
@@ -33,12 +34,14 @@ export function AdminPanel() {
   const [audit, setAudit] = useState<{ action: string; detail: string }[]>([]);
   const [showAudit, setShowAudit] = useState(false);
   const [metrics, setMetrics] = useState<Record<string, any> | null>(null);
+  const [users, setUsers] = useState<AuthUser[]>([]);
 
   const load = useCallback(async () => {
     try {
       setOv((await api.adminOverview()) as Overview);
       setErr("");
       api.metrics().then(setMetrics).catch(() => {});
+      api.adminUsers().then((r) => setUsers(r.users)).catch(() => {});
     } catch (e: any) {
       setErr(String(e.message || e));
       setOv(null);
@@ -158,6 +161,55 @@ export function AdminPanel() {
             </div>
           )}
         </div>
+      </div>
+
+      <div className="card">
+        <h2>👥 User management ({users.length})</h2>
+        <div className="hint">Every registered account. Suspend blocks sign-in instantly; promote grants Admin Panel access; temp password signs them in once to change it.</div>
+        <table className="utable">
+          <thead>
+            <tr><th>User</th><th>Role</th><th>Status</th><th>Joined</th><th>Actions</th></tr>
+          </thead>
+          <tbody>
+            {users.map((u) => (
+              <tr key={u.email}>
+                <td>
+                  <div className="uemail">👤 {u.display_name || u.email.split("@")[0]}</div>
+                  <div className="umeta">{u.email} · {u.user_id}</div>
+                </td>
+                <td>{u.role === "admin" ? "🛡 admin" : "member"}</td>
+                <td>{u.status === "active" ? <span className="badge ok">active</span> : <span className="badge err">suspended</span>}</td>
+                <td><span className="umeta">{u.created?.slice(0, 10)}</span></td>
+                <td>
+                  <div className="uactions">
+                    {u.status === "active" ? (
+                      <button className="mini ghost" onClick={() => guard(() => api.adminUserAction(u.email, "suspend"), "Suspended")}>Suspend</button>
+                    ) : (
+                      <button className="mini" onClick={() => guard(() => api.adminUserAction(u.email, "activate"), "Activated")}>Activate</button>
+                    )}
+                    {u.role === "user" ? (
+                      <button className="mini ghost" onClick={() => guard(() => api.adminUserAction(u.email, "promote"), "Promoted to admin")}>Promote</button>
+                    ) : (
+                      <button className="mini ghost" onClick={() => guard(() => api.adminUserAction(u.email, "demote"), "Demoted")}>Demote</button>
+                    )}
+                    <button className="mini ghost" onClick={async () => {
+                      try {
+                        const r = await api.adminUserTempPassword(u.email);
+                        toast(`Temp password: ${r.temporary_password}`, "ok");
+                      } catch (e) { toast(String(e), "err"); }
+                    }}>Temp PW</button>
+                    <button className="mini danger" onClick={() => {
+                      if (confirm(`Delete ${u.email}? This cannot be undone.`)) {
+                        guard(() => api.adminDeleteUser(u.email), "User deleted");
+                      }
+                    }}>Delete</button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {users.length === 0 && <div className="hint">No registered users yet.</div>}
       </div>
 
       <div className="card">

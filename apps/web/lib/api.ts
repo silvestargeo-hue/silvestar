@@ -42,6 +42,11 @@ export interface Hit {
   fingerprint?: string;
 }
 
+export interface AuthUser {
+  user_id: string; email: string; role: "admin" | "user";
+  status: "active" | "suspended"; display_name: string; created: string;
+}
+
 export interface AskResult {
   answer: string;
   engine: string;
@@ -157,6 +162,48 @@ export const api = {
   adminBackup: () =>
     req<Record<string, any>>("/api/v1/admin/backup", { headers: adminHeaders() }),
 
+  // ---- Modules 12-13: accounts & auth ----
+  authRegister: (email: string, password: string, display_name = "") =>
+    req<{ user: AuthUser; session_token: string }>("/api/v1/auth/register", {
+      method: "POST", body: JSON.stringify({ email, password, display_name }),
+    }),
+  authLogin: (email: string, password: string) =>
+    req<{ user: AuthUser; session_token: string }>("/api/v1/auth/login", {
+      method: "POST", body: JSON.stringify({ email, password }),
+    }),
+  authSession: (session_token: string) =>
+    req<{ user: AuthUser }>("/api/v1/auth/session", { method: "POST", body: JSON.stringify({ session_token }) }),
+  authProfile: (session_token: string, display_name: string) =>
+    req<{ user: AuthUser }>("/api/v1/auth/profile", {
+      method: "PUT", body: JSON.stringify({ session_token, display_name }),
+    }),
+  authPassword: (session_token: string, old_password: string, new_password: string) =>
+    req<{ user: AuthUser; session_token: string }>("/api/v1/auth/password", {
+      method: "POST", body: JSON.stringify({ session_token, old_password, new_password }),
+    }),
+  authForgot: (email: string) =>
+    req<{ sent: boolean; dev_code?: string }>("/api/v1/auth/forgot", {
+      method: "POST", body: JSON.stringify({ email }),
+    }),
+  authReset: (email: string, code: string, new_password: string) =>
+    req<{ reset: boolean }>("/api/v1/auth/reset", {
+      method: "POST", body: JSON.stringify({ email, code, new_password }),
+    }),
+  adminUsers: () =>
+    req<{ total: number; users: AuthUser[] }>("/api/v1/admin/users", { headers: adminHeaders() }),
+  adminUserAction: (email: string, action: "suspend" | "activate" | "promote" | "demote") =>
+    req<Record<string, any>>(`/api/v1/admin/users/${encodeURIComponent(email)}/${action}`, {
+      method: "POST", headers: adminHeaders(),
+    }),
+  adminUserTempPassword: (email: string) =>
+    req<{ temporary_password: string }>(`/api/v1/admin/users/${encodeURIComponent(email)}/reset-password`, {
+      method: "POST", headers: adminHeaders(),
+    }),
+  adminDeleteUser: (email: string) =>
+    req<{ deleted: boolean }>(`/api/v1/admin/users/${encodeURIComponent(email)}`, {
+      method: "DELETE", headers: adminHeaders(),
+    }),
+
   // ---- Modules 10-11: user panel + admin panel ----
   meStats: (user_id: string, session_token = "") =>
     req<{
@@ -182,6 +229,12 @@ export const api = {
 };
 
 function adminHeaders(): Record<string, string> {
-  const k = typeof window !== "undefined" ? localStorage.getItem("sv-admin-key") || "" : "";
-  return k ? { "x-admin-key": k } : {};
+  const h: Record<string, string> = {};
+  if (typeof window !== "undefined") {
+    const k = localStorage.getItem("sv-admin-key") || "";
+    if (k) h["x-admin-key"] = k;
+    const s = localStorage.getItem("sv-session") || "";
+    if (s) h["Authorization"] = `Bearer ${s}`;
+  }
+  return h;
 }

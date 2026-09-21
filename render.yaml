@@ -34,6 +34,20 @@ services:
         value: nvidia/nemotron-3.5-lightning:free,z-ai/glm-5.2:free
       - key: AI_API_KEY
         sync: false
+      # Optional email delivery for OTP codes — leave empty to use dev-code
+      # fallback; fill in the dashboard (e.g. Gmail SMTP) for real emails.
+      - key: SMTP_HOST
+        value: ""
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USER
+        value: ""
+      - key: SMTP_PASSWORD
+        value: ""
+      - key: SMTP_FROM
+        value: ""
+      - key: SMTP_TLS
+        value: "1"
       - key: PYTHON_VERSION
         value: "3.12"
 

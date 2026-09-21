@@ -146,6 +146,8 @@
 .lockbtn:disabled { opacity: 0.55; cursor: not-allowed; }
 
 .lockerror { color: var(--err); font-size: 13px; margin-top: 10px; }
+.locknotice { color: var(--ok); font-size: 12.5px; margin-top: 10px; }
+.lockinput + .lockinput { margin-top: 10px; }
 
 .lockrow {
   display: flex; justify-content: space-between; align-items: center;
