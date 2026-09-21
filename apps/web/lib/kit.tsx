@@ -45,6 +45,7 @@ export function Modal({ title, onClose, children }: {
   return (
     <div className="modal-back" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-label={title}>
+        <button className="modal-x" onClick={onClose} aria-label="Close dialog">✕</button>
         <h3>{title}</h3>
         {children}
       </div>

@@ -163,8 +163,10 @@ footer.pf { margin-top: 30px; color: var(--muted); font-size: 12px; text-align: 
 
 /* modal */
 .modal-back { position: fixed; inset: 0; z-index: 80; background: rgba(0,0,0,.55); backdrop-filter: blur(3px); display: flex; align-items: center; justify-content: center; padding: 14px; }
-.modal { width: 100%; max-width: 640px; max-height: 84vh; overflow-y: auto; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px; }
+.modal { position: relative; width: 100%; max-width: 640px; max-height: 84vh; overflow-y: auto; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px; }
 .modal h3 { margin: 0 0 10px; }
+.modal-x { position: absolute; top: 10px; right: 12px; background: none; border: none; font-size: 18px; line-height: 1; color: var(--muted); cursor: pointer; padding: 6px 10px; border-radius: 8px; }
+.modal-x:hover { color: var(--text); background: var(--border); }
 
 /* misc features */
 .meter { height: 6px; border-radius: 99px; background: var(--border); overflow: hidden; margin: 6px 0; }

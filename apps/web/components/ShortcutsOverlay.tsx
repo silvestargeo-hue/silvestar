@@ -11,6 +11,7 @@ const SHORTCUTS: [string, string][] = [
 ];
 
 export function ShortcutsOverlay({ open, onClose }: { open: boolean; onClose: () => void }) {
+  if (!open) return null; // never render when closed (this was the stuck-overlay bug)
   return (
     <Modal title="⌨ Keyboard shortcuts" onClose={onClose}>
       <div className="kv">
@@ -20,6 +21,9 @@ export function ShortcutsOverlay({ open, onClose }: { open: boolean; onClose: ()
             <span>{d}</span>
           </div>
         ))}
+      </div>
+      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}>
+        <button className="btn primary" onClick={onClose}>Got it</button>
       </div>
     </Modal>
   );
