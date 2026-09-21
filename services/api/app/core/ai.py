@@ -24,14 +24,20 @@ class SilvestarAI:
     name = "Silvestar"
 
     async def _post_openai(self, messages: list[dict], model_override: str | None = None) -> str | None:
-        """OpenAI-compatible chat with auth + model failover (429/ratelimit aware)."""
+        """OpenAI-compatible chat with auth, model failover, and a total wall-clock
+        budget so callers always get an answer (or fall through to the next engine)."""
+        import time as _t
+
         headers = {"Content-Type": "application/json"}
         if settings.ai_api_key:
             headers["Authorization"] = f"Bearer {settings.ai_api_key}"
+        deadline = _t.monotonic() + settings.ai_budget_s
         for model in [model_override or settings.ai_model, *settings.ai_failover_models]:
-            for attempt in range(2):  # one retry per model on transient errors
+            for attempt in range(2):
+                if _t.monotonic() > deadline:
+                    return None
                 try:
-                    async with httpx.AsyncClient(timeout=30) as client:
+                    async with httpx.AsyncClient(timeout=settings.ai_timeout) as client:
                         r = await client.post(settings.ai_primary_url, headers=headers, json={
                             "model": model,
                             "messages": messages,
@@ -94,6 +100,9 @@ class SilvestarAI:
         ]
         answer = await self._post_openai(messages)
         engine = "openai-compatible"
+        if not answer:
+            answer = await self._get_completion(instruction + "\n\n" + corpus[:6000])
+            engine = "pollinations-get"
         if not answer:
             answer = self._local_extractive(instruction, corpus[:4000])
             engine = "local-extractive"

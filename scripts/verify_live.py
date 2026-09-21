@@ -153,6 +153,60 @@ def main() -> int:
     check("user stats", lambda: json.dumps(call(
         "GET", "/api/v1/me/stats?user_id=liveuser&session_token=" + token))[:120])
 
+    # --- Modules 12-13: accounts & auth ---
+    stamp = str(int(time.time()))
+    em = f"owner-{stamp}@silvestar.dev"
+    reg = call("POST", "/api/v1/auth/register", {
+        "email": em, "password": "Passw0rd!23", "display_name": "Owner"})
+    check("auth register (first=admin)", lambda: reg["user"]["role"])
+    ahdr = {"Authorization": "Bearer " + reg["session_token"]}
+    check("auth login", lambda: call("POST", "/api/v1/auth/login", {
+        "email": em, "password": "Passw0rd!23"})["user"]["email"])
+    check("auth session validate", lambda: call("POST", "/api/v1/auth/session", {
+        "session_token": reg["session_token"]})["user"]["user_id"])
+    check("auth profile update", lambda: call("PUT", "/api/v1/auth/profile", {
+        "session_token": reg["session_token"], "display_name": "Silvestar Owner"})["user"]["display_name"])
+    otp = call("POST", "/api/v1/auth/forgot", {"email": em})
+    code = otp.get("dev_code", "")
+    check("auth otp issued", lambda: "dev code ✓" if code else "smtp path")
+    if code:
+        check("auth otp reset", lambda: call("POST", "/api/v1/auth/reset", {
+            "email": em, "code": code, "new_password": "NewPass0rd!23"})["reset"])
+        tok2 = call("POST", "/api/v1/auth/login", {
+            "email": em, "password": "NewPass0rd!23"})["session_token"]
+        check("auth login new pw", lambda: "ok")
+        chg = call("POST", "/api/v1/auth/password", {
+            "session_token": tok2, "old_password": "NewPass0rd!23",
+            "new_password": "Passw0rd!23"})
+        check("auth change password", lambda: chg["sessions_invalidated"])
+        # password change kills every old session — rebuild admin auth from the fresh token
+        ahdr = {"Authorization": "Bearer " + chg["session_token"]}
+
+        def _tok2_dead():
+            try:
+                call("POST", "/api/v1/auth/session", {"session_token": tok2})
+                return "FAIL: still valid"
+            except urllib.error.HTTPError:
+                return "invalidated ✓"
+        check("old session invalidated", _tok2_dead)
+    em2 = f"member-{stamp}@silvestar.dev"
+    call("POST", "/api/v1/auth/register", {"email": em2, "password": "Passw0rd!23"})
+    check("admin users (role session)", lambda: call("GET", "/api/v1/admin/users", None, headers=ahdr)["total"])
+    check("admin suspend user", lambda: call("POST", f"/api/v1/admin/users/{em2}/suspend", None, headers=ahdr)["status"])
+
+    def _suspended_blocked():
+        try:
+            call("POST", "/api/v1/auth/login", {"email": em2, "password": "Passw0rd!23"})
+            return "FAIL: login allowed"
+        except urllib.error.HTTPError as e:
+            return f"blocked ({e.code}) ✓"
+    check("suspended login blocked", _suspended_blocked)
+    check("admin activate user", lambda: call("POST", f"/api/v1/admin/users/{em2}/activate", None, headers=ahdr)["status"])
+    check("admin promote user", lambda: call("POST", f"/api/v1/admin/users/{em2}/promote", None, headers=ahdr)["role"])
+    check("admin demote user", lambda: call("POST", f"/api/v1/admin/users/{em2}/demote", None, headers=ahdr)["role"])
+    check("admin temp password", lambda: call("POST", f"/api/v1/admin/users/{em2}/reset-password", None, headers=ahdr)["temporary_password"][:4] + "…")
+    check("admin delete user", lambda: call("DELETE", f"/api/v1/admin/users/{em2}", None, headers=ahdr)["deleted"])
+
     # --- Level-50 platform services ---
     check("notify self", lambda: call("POST", "/api/v1/notifications", {
         "user_id": "liveuser", "message": "Level-50 reminder"})["queued"])

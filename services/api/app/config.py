@@ -38,10 +38,19 @@ class Settings:
     ai_failover_models: list = field(default_factory=lambda: [
         m for m in os.getenv("AI_FAILOVER_MODELS",
                              "nvidia/nemotron-3.5-lightning:free,z-ai/glm-5.2:free").split(",") if m])
+    ai_timeout: float = field(default_factory=lambda: float(os.getenv("AI_TIMEOUT", "20")))
+    ai_budget_s: float = field(default_factory=lambda: float(os.getenv("AI_BUDGET_S", "45")))
     puter_proxy_url: str = field(default_factory=lambda: os.getenv("PUTER_PROXY_URL", ""))
     # --- Security ---
     secret_key: str = field(default_factory=lambda: os.getenv("SECRET_KEY", "silvestar-dev-secret-change-me"))
     admin_key: str = field(default_factory=lambda: os.getenv("SILVESTAR_ADMIN_KEY", "silvestar-admin"))
+    # --- Email (OTP delivery) — absent SMTP falls back to dev-code responses ---
+    smtp_host: str = field(default_factory=lambda: os.getenv("SMTP_HOST", ""))
+    smtp_port: int = field(default_factory=lambda: int(os.getenv("SMTP_PORT", "587")))
+    smtp_user: str = field(default_factory=lambda: os.getenv("SMTP_USER", ""))
+    smtp_password: str = field(default_factory=lambda: os.getenv("SMTP_PASSWORD", ""))
+    smtp_from: str = field(default_factory=lambda: os.getenv("SMTP_FROM", ""))
+    smtp_tls: bool = field(default_factory=lambda: os.getenv("SMTP_TLS", "1") not in ("0", "false", "no"))
     vault_kdf_iterations: int = field(default_factory=lambda: int(os.getenv("VAULT_KDF_ITERATIONS", "200000")))
     # --- Misc ---
     cors_origins: list = field(default_factory=lambda: [

@@ -341,10 +341,16 @@ async def graph_stats():
 
 
 # ------------------------------------------- Modules 10-11: Admin/User panels ---
-def _require_admin(request: Request) -> None:
+async def _require_admin(request: Request) -> None:
     key = request.headers.get("x-admin-key", "")
-    if not key or key != settings.admin_key:
-        raise HTTPException(403, "admin key required")
+    if key and key == settings.admin_key:
+        return
+    authz = request.headers.get("authorization", "")
+    if authz.startswith("Bearer "):
+        user = await auth.validate_session(authz[7:])
+        if user and user.get("role") == "admin" and user.get("status") == "active":
+            return
+    raise HTTPException(403, "admin key or admin session required")
 
 
 class AdminDocIn(BaseModel):
@@ -359,7 +365,7 @@ class ModelIn(BaseModel):
 
 @app.get("/api/v1/admin/overview", tags=["admin"])
 async def admin_overview(request: Request):
-    _require_admin(request)
+    await _require_admin(request)
     _docs, total = await db.list("archive", limit=1)
     try:
         realtime_info = hub.stats() if hasattr(hub, "stats") else {"rooms": "n/a"}
@@ -379,7 +385,7 @@ async def admin_overview(request: Request):
 
 @app.post("/api/v1/admin/documents", tags=["admin"])
 async def admin_add_document(request: Request, body: AdminDocIn):
-    _require_admin(request)
+    await _require_admin(request)
     import uuid
 
     doc_id = "a-" + uuid.uuid4().hex[:12]
@@ -395,7 +401,7 @@ async def admin_add_document(request: Request, body: AdminDocIn):
 
 @app.delete("/api/v1/admin/documents/{doc_id}", tags=["admin"])
 async def admin_delete_document(doc_id: str, request: Request):
-    _require_admin(request)
+    await _require_admin(request)
     doc = await db.fetch(doc_id)
     if not doc:
         raise HTTPException(404, "document not found")
@@ -407,7 +413,7 @@ async def admin_delete_document(doc_id: str, request: Request):
 
 @app.post("/api/v1/admin/cache/clear", tags=["admin"])
 async def admin_cache_clear(request: Request):
-    _require_admin(request)
+    await _require_admin(request)
     await cache.clear()
     await _audit("admin.cache_clear", "")
     return {"cleared": True}
@@ -416,7 +422,7 @@ async def admin_cache_clear(request: Request):
 @app.post("/api/v1/admin/ai/model", tags=["admin"])
 async def admin_set_ai_model(request: Request, body: ModelIn):
     """Runtime AI model switch — persisted in cache, applied on next ask."""
-    _require_admin(request)
+    await _require_admin(request)
     if body.model:
         await cache.set("ai:model", body.model)
     else:
@@ -616,7 +622,7 @@ async def metrics():
 
 @app.get("/api/v1/admin/audit", tags=["admin"])
 async def admin_audit(request: Request):
-    _require_admin(request)
+    await _require_admin(request)
     rows, total = await db.list("audit-log", limit=50)
     return {"total": total, "entries": [
         {"id": r["id"], "action": r["title"], "detail": r.get("snippet", "")}
@@ -636,14 +642,275 @@ async def _audit(action: str, detail: str = "") -> None:
 
 @app.get("/api/v1/admin/backup", tags=["admin"])
 async def admin_backup(request: Request):
-    _require_admin(request)
+    await _require_admin(request)
     docs, _ = await db.list("archive", limit=1000)
     return {
         "format": "silvestar-backup-v1",
-        "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "created": time.strftime("%Y-%m-%dT%H:%M:%S Z", time.gmtime()).replace(" ", ""),
         "archive": docs,
         "graph": await graph.stats(),
     }
+
+
+# ====================== Modules 12-13: accounts, auth, user control ======================
+from .core.auth import ACCOUNTS_LIB, AuthError, auth  # noqa: E402
+
+
+class RegisterIn(BaseModel):
+    email: str
+    password: str
+    display_name: str = ""
+
+
+class LoginIn(BaseModel):
+    email: str
+    password: str
+
+
+class ProfileIn(BaseModel):
+    session_token: str
+    display_name: str = ""
+
+
+class PasswordChangeIn(BaseModel):
+    session_token: str
+    old_password: str
+    new_password: str
+
+
+class OtpRequestIn(BaseModel):
+    email: str
+
+
+class OtpConfirmIn(BaseModel):
+    email: str
+    code: str
+    new_password: str
+
+
+class SessionIn(BaseModel):
+    session_token: str
+
+
+async def _current_user(session_token: str) -> dict:
+    user = await auth.validate_session(session_token)
+    if not user:
+        raise HTTPException(401, "session invalid or expired — sign in again")
+    return user
+
+
+@app.post("/api/v1/auth/register", tags=["auth"])
+async def auth_register(body: RegisterIn):
+    try:
+        user = await auth.register(body.email, body.password, body.display_name)
+        acct = await auth.authenticate(body.email, body.password)
+        token = auth.issue_auth_token(acct)
+        await _audit("auth.register", f"{user['email']} role={user['role']}")
+        return {"user": user, "session_token": token}
+
+    except AuthError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/v1/auth/login", tags=["auth"])
+async def auth_login(body: LoginIn):
+    try:
+        acct = await auth.authenticate(body.email, body.password)
+    except AuthError as e:
+        raise HTTPException(401, str(e))
+    token = auth.issue_auth_token(acct)
+    await _audit("auth.login", acct["email"])
+    return {"user": auth.public(acct), "session_token": token}
+
+
+@app.post("/api/v1/auth/session", tags=["auth"])
+async def auth_session(body: SessionIn):
+    user = await auth.validate_session(body.session_token)
+    if not user:
+        raise HTTPException(401, "session invalid or expired")
+    return {"user": user}
+
+
+@app.post("/api/v1/auth/logout", tags=["auth"])
+async def auth_logout(body: SessionIn):
+    # Stateless JWT-style token: client discards it; audit the event.
+    return {"logged_out": True}
+
+
+@app.put("/api/v1/auth/profile", tags=["auth"])
+async def auth_profile(body: ProfileIn):
+    user = await _current_user(body.session_token)
+    try:
+        updated = await auth.update_display_name(user["email"], body.display_name)
+    except AuthError as e:
+        raise HTTPException(400, str(e))
+    return {"user": updated}
+
+
+@app.post("/api/v1/auth/password", tags=["auth"])
+async def auth_password(body: PasswordChangeIn):
+    user = await _current_user(body.session_token)
+    try:
+        updated = await auth.change_password(user["email"], body.old_password, body.new_password)
+    except AuthError as e:
+        raise HTTPException(400, str(e))
+    await _audit("auth.password_change", user["email"])
+    # all old sessions are dead by design — issue a fresh one for THIS device
+    acct = await auth.authenticate(user["email"], body.new_password)
+    return {"user": updated, "sessions_invalidated": True, "session_token": auth.issue_auth_token(acct)}
+
+
+@app.post("/api/v1/auth/forgot", tags=["auth"])
+async def auth_forgot(body: OtpRequestIn):
+    r = await auth.request_reset(body.email)
+    await _audit("auth.otp_request", body.email)
+    return r
+
+
+@app.post("/api/v1/auth/reset", tags=["auth"])
+async def auth_reset(body: OtpConfirmIn):
+    try:
+        r = await auth.confirm_reset(body.email, body.code, body.new_password)
+    except AuthError as e:
+        raise HTTPException(400, str(e))
+    await _audit("auth.otp_reset", body.email)
+    return r
+
+
+# --------------------------------------------- admin: full user control ---
+def _require_role_admin(user: dict) -> None:
+    if user.get("role") != "admin":
+        raise HTTPException(403, "admin role required")
+
+
+async def _other_active_admins(exclude_doc_id: str) -> list[str]:
+    """Emails of active admins other than the excluded account doc."""
+    rows, _t = await db.list(ACCOUNTS_LIB, limit=500)
+    out: list[str] = []
+    for r in rows:
+        if r["id"] == exclude_doc_id:
+            continue
+        acct = await auth._account(r["id"].split("::", 1)[1])
+        if acct and acct["role"] == "admin" and acct["status"] == "active":
+            out.append(acct["email"])
+    return out
+
+
+@app.get("/api/v1/admin/users", tags=["admin"])
+async def admin_users(request: Request):
+    """Every registered user, for the admin panel."""
+    await _require_admin(request)
+    rows, total = await db.list(ACCOUNTS_LIB, limit=500)
+    users = []
+    for r in rows:
+        m = r.get("meta", {})
+        users.append({
+            "email": r["id"].split("::", 1)[1],
+            "user_id": m.get("user_id", ""),
+            "role": m.get("role", "user"),
+            "status": m.get("status", "active"),
+            "display_name": r.get("title", ""),
+            "created": m.get("created", ""),
+        })
+    users.sort(key=lambda u: (u["role"] != "admin", u["created"]))
+    return {"total": total, "users": users}
+
+
+@app.post("/api/v1/admin/users/{email}/suspend", tags=["admin"])
+async def admin_suspend(email: str, request: Request):
+    await _require_admin(request)
+    return await _set_user_status(email, "suspended")
+
+
+@app.post("/api/v1/admin/users/{email}/activate", tags=["admin"])
+async def admin_activate(email: str, request: Request):
+    await _require_admin(request)
+    return await _set_user_status(email, "active")
+
+
+async def _set_user_status(email: str, status: str) -> dict:
+    from .core.auth import _doc_id
+
+    doc = await db.fetch(_doc_id(email))
+    if not doc:
+        raise HTTPException(404, "user not found")
+    meta = doc.get("meta", {})
+    if meta.get("role") == "admin" and status == "suspended":
+        if not await _other_active_admins(doc["id"]):
+            raise HTTPException(400, "cannot suspend the only admin")
+    meta["status"] = status
+    await db.upsert_document(_doc_id(email), ACCOUNTS_LIB, doc["title"], doc["content"], meta=meta)
+    await _audit("admin.user_status", f"{email} → {status}")
+    return {"email": email, "status": status}
+
+
+@app.post("/api/v1/admin/users/{email}/promote", tags=["admin"])
+async def admin_promote(email: str, request: Request):
+    await _require_admin(request)
+    return await _set_user_role(email, "admin")
+
+
+@app.post("/api/v1/admin/users/{email}/demote", tags=["admin"])
+async def admin_demote(email: str, request: Request):
+    await _require_admin(request)
+    return await _set_user_role(email, "user")
+
+
+async def _set_user_role(email: str, role: str) -> dict:
+    from .core.auth import _doc_id
+
+    doc = await db.fetch(_doc_id(email))
+    if not doc:
+        raise HTTPException(404, "user not found")
+    meta = doc.get("meta", {})
+    if meta.get("role") == "admin" and role == "user":
+        if not await _other_active_admins(doc["id"]):
+            raise HTTPException(400, "cannot demote the only admin")
+    meta["role"] = role
+    await db.upsert_document(_doc_id(email), ACCOUNTS_LIB, doc["title"], doc["content"], meta=meta)
+    await _audit("admin.user_role", f"{email} → {role}")
+    return {"email": email, "role": role}
+
+
+@app.post("/api/v1/admin/users/{email}/reset-password", tags=["admin"])
+async def admin_reset_password(email: str, request: Request):
+    """Admin sets a temporary password; the user changes it after signing in."""
+    await _require_admin(request)
+    import secrets as _s
+
+    temp = "Tmp-" + _s.token_urlsafe(6)
+    from .core.auth import _doc_id
+
+    doc = await db.fetch(_doc_id(email))
+    if not doc:
+        raise HTTPException(404, "user not found")
+    acct = {
+        "hash": doc["content"], "salt": doc["meta"].get("salt", ""),
+        "iterations": int(doc["meta"].get("iterations", 200000)),
+    }
+    rec = security.hash_password(temp)
+    meta = doc.get("meta", {})
+    meta.update({"salt": rec["salt"], "iterations": rec["iterations"]})
+    await db.upsert_document(_doc_id(email), ACCOUNTS_LIB, doc["title"], rec["hash"], meta=meta)
+    await _audit("admin.user_reset_password", email)
+    return {"email": email, "temporary_password": temp}
+
+
+@app.delete("/api/v1/admin/users/{email}", tags=["admin"])
+async def admin_delete_user(email: str, request: Request):
+    await _require_admin(request)
+    from .core.auth import _doc_id
+
+    doc = await db.fetch(_doc_id(email))
+    if not doc:
+        raise HTTPException(404, "user not found")
+    meta = doc.get("meta", {})
+    if meta.get("role") == "admin":
+        if not await _other_active_admins(doc["id"]):
+            raise HTTPException(400, "cannot delete the only admin")
+    await db.delete(_doc_id(email))
+    await _audit("admin.user_delete", email)
+    return {"deleted": True}
 
 
 @app.middleware("http")
