@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { StatTile, Chip } from "./Stat";
-import { toast, timeAgo } from "@/lib/kit";
+import { toast, timeAgo, downloadFile } from "@/lib/kit";
 
 type Overview = {
   archive_documents: number;
@@ -30,11 +30,15 @@ export function AdminPanel() {
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
   const [customModel, setCustomModel] = useState("");
+  const [audit, setAudit] = useState<{ action: string; detail: string }[]>([]);
+  const [showAudit, setShowAudit] = useState(false);
+  const [metrics, setMetrics] = useState<Record<string, any> | null>(null);
 
   const load = useCallback(async () => {
     try {
       setOv((await api.adminOverview()) as Overview);
       setErr("");
+      api.metrics().then(setMetrics).catch(() => {});
     } catch (e: any) {
       setErr(String(e.message || e));
       setOv(null);
@@ -118,12 +122,41 @@ export function AdminPanel() {
               🧹 Clear cache
             </button>
             <button className="ghost" onClick={load}>🔄 Refresh overview</button>
+            <button className="ghost" onClick={async () => {
+              try {
+                const a = await api.adminAudit();
+                setAudit(a.entries);
+                setShowAudit(true);
+              } catch (e) { toast(String(e), "err"); }
+            }}>📜 Audit trail</button>
+            <button className="ghost" onClick={async () => {
+              try {
+                const b = await api.adminBackup();
+                downloadFile(`silvestar-backup-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(b, null, 2));
+                toast("Backup downloaded ✓", "ok");
+              } catch (e) { toast(String(e), "err"); }
+            }}>⬇ Backup</button>
           </div>
           <div className="kv" style={{ marginTop: 12 }}>
             <span className="k">vault cipher</span><span>{ov?.vault.cipher}</span>
             <span className="k">kdf</span><span>{ov?.vault.kdf}</span>
             <span className="k">sessions</span><span>{String(ov?.vault.sessions_active)}</span>
+            <span className="k">requests</span><span>{metrics?.requests_total ?? "—"}</span>
+            <span className="k">ai asks</span><span>{metrics?.ai_asks_total ?? "—"}</span>
+            <span className="k">searches</span><span>{metrics?.searches_total ?? "—"}</span>
           </div>
+          {showAudit && (
+            <div style={{ marginTop: 10 }}>
+              <div className="hint">Audit trail (latest {audit.length})</div>
+              {audit.map((a, i) => (
+                <div key={i} className="hit">
+                  <div className="t">{a.action}</div>
+                  <div className="s">{a.detail}</div>
+                </div>
+              ))}
+              {audit.length === 0 && <div className="hint">No admin actions logged yet.</div>}
+            </div>
+          )}
         </div>
       </div>
 

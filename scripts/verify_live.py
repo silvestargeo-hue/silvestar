@@ -147,6 +147,15 @@ def main() -> int:
     check("user stats", lambda: json.dumps(call(
         "GET", "/api/v1/me/stats?user_id=liveuser&session_token=" + token))[:120])
 
+    # --- Level-50 platform services ---
+    check("notify self", lambda: call("POST", "/api/v1/notifications", {
+        "user_id": "liveuser", "message": "Level-50 reminder"})["queued"])
+    check("notifications list", lambda: f"{len(call('GET', '/api/v1/notifications?user_id=liveuser')['notifications'])} item(s)")
+    check("public stats", lambda: call("GET", "/api/v1/stats/public")["assistant"])
+    check("metrics", lambda: call("GET", "/api/v1/metrics")["modes"]["db"])
+    check("admin audit", lambda: f"{call('GET', '/api/v1/admin/audit', None, headers=admin)['total']} entries")
+    check("admin backup", lambda: call("GET", "/api/v1/admin/backup", None, headers=admin)["format"])
+
     server.should_exit = True
     t.join(timeout=5)
 

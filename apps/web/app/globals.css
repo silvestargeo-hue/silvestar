@@ -239,3 +239,18 @@ footer.pf { margin-top: 30px; color: var(--muted); font-size: 12px; text-align: 
   .sidebar { display: none; }
   .mhead { display: flex; }
 }
+
+/* skeleton shimmer */
+.skel {
+  border-radius: 14px; background: linear-gradient(90deg, var(--panel2) 25%, var(--panel) 45%, var(--panel2) 65%);
+  background-size: 220% 100%; animation: shimmer 1.3s infinite linear;
+  border: 1px solid var(--border);
+}
+@keyframes shimmer { from { background-position: 160% 0; } to { background-position: -60% 0; } }
+
+.bell { position: relative; }
+.bell .dot {
+  position: absolute; top: -4px; right: -4px; min-width: 16px; height: 16px; padding: 0 4px;
+  border-radius: 99px; background: var(--err); color: white; font-size: 10px; font-weight: 800;
+  display: flex; align-items: center; justify-content: center;
+}

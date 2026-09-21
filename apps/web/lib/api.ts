@@ -141,6 +141,22 @@ export const api = {
   docVersions: (doc_id: string) =>
     req<{ versions: { id: string; title: string; snippet: string }[] }>(`/api/v1/archive/documents/${doc_id}/versions`),
 
+  // ---- Level-50 platform services ----
+  notifications: (user_id: string) =>
+    req<{ notifications: { id: string; message: string; ts: string }[]; unread: number }>(
+      `/api/v1/notifications?user_id=${encodeURIComponent(user_id)}`),
+  addNotification: (user_id: string, message: string) =>
+    req<{ queued: boolean }>("/api/v1/notifications", { method: "POST", body: JSON.stringify({ user_id, message }) }),
+  dismissNotification: (nid: string, user_id: string) =>
+    req<{ read: boolean }>(`/api/v1/notifications/${nid}?user_id=${encodeURIComponent(user_id)}`, { method: "DELETE" }),
+  publicStats: () =>
+    req<{ archive_documents: number; active_rooms: number; ai_online: boolean; assistant: string; uptime_s: number }>("/api/v1/stats/public"),
+  metrics: () => req<Record<string, any>>("/api/v1/metrics"),
+  adminAudit: () =>
+    req<{ total: number; entries: { id: string; action: string; detail: string }[] }>("/api/v1/admin/audit", { headers: adminHeaders() }),
+  adminBackup: () =>
+    req<Record<string, any>>("/api/v1/admin/backup", { headers: adminHeaders() }),
+
   // ---- Modules 10-11: user panel + admin panel ----
   meStats: (user_id: string, session_token = "") =>
     req<{

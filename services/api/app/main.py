@@ -389,6 +389,7 @@ async def admin_add_document(request: Request, body: AdminDocIn):
     )
     await cache.delete("archive:stats")
     await graph.merge_node(doc_id, ["Document"], {"title": body.title, "library": "archive"})
+    await _audit("admin.publish", f"doc={doc_id} title={body.title[:60]}")
     return saved
 
 
@@ -400,6 +401,7 @@ async def admin_delete_document(doc_id: str, request: Request):
         raise HTTPException(404, "document not found")
     await db.delete(doc_id)
     await cache.delete("archive:stats")
+    await _audit("admin.delete", f"doc={doc_id}")
     return {"deleted": True}
 
 
@@ -407,6 +409,7 @@ async def admin_delete_document(doc_id: str, request: Request):
 async def admin_cache_clear(request: Request):
     _require_admin(request)
     await cache.clear()
+    await _audit("admin.cache_clear", "")
     return {"cleared": True}
 
 
@@ -418,6 +421,7 @@ async def admin_set_ai_model(request: Request, body: ModelIn):
         await cache.set("ai:model", body.model)
     else:
         await cache.delete("ai:model")
+    await _audit("admin.model_switch", f"model={body.model or 'default'}")
     return {"active_model": body.model or settings.ai_model, "persisted": bool(body.model)}
 
 
@@ -534,3 +538,129 @@ async def archive_versions(doc_id: str):
     rows, _ = await db.list(f"archive-versions:{doc_id}", limit=50)
     return {"doc_id": doc_id,
             "versions": [{"id": r["id"], "title": r["title"], "snippet": r.get("snippet", "")} for r in rows]}
+
+
+# ============================ LEVEL-50 WAVE: platform services ============================
+class NotifyIn(BaseModel):
+    message: str = Field(min_length=1, max_length=280)
+    user_id: str = "anon"
+
+
+async def _notify(user_id: str, message: str) -> None:
+    import uuid
+
+    await db.upsert_document(
+        "n-" + uuid.uuid4().hex[:12], f"notify:{user_id}",
+        message, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        meta={"kind": "notification"},
+    )
+
+
+@app.get("/api/v1/notifications", tags=["user"])
+async def notifications(user_id: str = Query(...)):
+    rows, total = await db.list(f"notify:{user_id}", limit=30)
+    return {"notifications": [
+        {"id": r["id"], "message": r["title"], "ts": r.get("snippet", "")}
+        for r in rows
+    ], "unread": total}
+
+
+@app.post("/api/v1/notifications", tags=["user"])
+async def notify_self(body: NotifyIn):
+    """Personal reminder — arrives in your notification center."""
+    await _notify(body.user_id, body.message)
+    return {"queued": True}
+
+
+@app.delete("/api/v1/notifications/{nid}", tags=["user"])
+async def notification_read(nid: str, user_id: str = Query(...)):
+    doc = await db.fetch(nid)
+    if not doc or doc["library"] != f"notify:{user_id}":
+        raise HTTPException(404, "notification not found")
+    await db.delete(nid)
+    return {"read": True}
+
+
+@app.get("/api/v1/stats/public", tags=["user"])
+async def public_stats():
+    """Landing-page numbers — no auth required."""
+    _d, archive_total = await db.list("archive", limit=1)
+    try:
+        rooms = (hub.stats() or {}).get("rooms", 0) if hasattr(hub, "stats") else 0
+    except Exception:
+        rooms = 0
+    ai_h = await ai.health()
+    return {
+        "archive_documents": archive_total,
+        "active_rooms": rooms,
+        "ai_online": bool(ai_h.get("primary_reachable")),
+        "assistant": ai_h.get("assistant"),
+        "uptime_s": int(time.time() - started_at),
+    }
+
+
+@app.get("/api/v1/metrics", tags=["admin"])
+async def metrics():
+    async def _c(key: str) -> int:
+        v = await cache.get(key)
+        return int(v) if v else 0
+
+    return {
+        "uptime_s": int(time.time() - started_at),
+        "requests_total": await _c("met:req"),
+        "ai_asks_total": await _c("met:ask"),
+        "searches_total": await _c("met:search"),
+        "modes": {"db": (await db.health()).get("mode"), "cache": (await cache.health()).get("mode")},
+    }
+
+
+@app.get("/api/v1/admin/audit", tags=["admin"])
+async def admin_audit(request: Request):
+    _require_admin(request)
+    rows, total = await db.list("audit-log", limit=50)
+    return {"total": total, "entries": [
+        {"id": r["id"], "action": r["title"], "detail": r.get("snippet", "")}
+        for r in rows
+    ]}
+
+
+async def _audit(action: str, detail: str = "") -> None:
+    import uuid
+
+    await db.upsert_document(
+        "aud-" + uuid.uuid4().hex[:12], "audit-log", action,
+        f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} {detail}"[:280],
+        meta={"kind": "audit"},
+    )
+
+
+@app.get("/api/v1/admin/backup", tags=["admin"])
+async def admin_backup(request: Request):
+    _require_admin(request)
+    docs, _ = await db.list("archive", limit=1000)
+    return {
+        "format": "silvestar-backup-v1",
+        "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "archive": docs,
+        "graph": await graph.stats(),
+    }
+
+
+@app.middleware("http")
+async def telemetry(request: Request, call_next):
+    import time as _t
+
+    t0 = _t.perf_counter()
+    response = await call_next(request)
+    ms = (_t.perf_counter() - t0) * 1000
+    response.headers["X-Response-Time"] = f"{ms:.1f}ms"
+    try:
+        await cache.incr("met:req", ttl=86400)
+        path = request.url.path
+        if path.endswith("/ask"):
+            await cache.incr("met:ask", ttl=86400)
+        elif "/search" in path:
+            await cache.incr("met:search", ttl=86400)
+    except Exception:
+        pass
+    return response

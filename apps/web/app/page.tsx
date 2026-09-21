@@ -12,6 +12,9 @@ import { UserPanel } from "@/components/UserPanel";
 import { AdminPanel } from "@/components/AdminPanel";
 import { Shell, type NavTab } from "@/components/Shell";
 import { CommandPalette, type Cmd } from "@/components/CommandPalette";
+import { NotificationCenter, useNotificationCount } from "@/components/NotificationCenter";
+import { ShortcutsOverlay } from "@/components/ShortcutsOverlay";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useOnline } from "@/lib/kit";
 import "./lock.css";
 
@@ -34,7 +37,10 @@ export default function Home() {
   const [checked, setChecked] = useState(false);
   const [adminEnabled, setAdminEnabled] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [notifOpen, setNotifOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const [userId] = useState(() => "u-" + Math.random().toString(36).slice(2, 9));
+  const { count: notifCount, refresh: refreshNotifs } = useNotificationCount(userId);
   const online = useOnline();
 
   const refreshHealth = useCallback(async () => {
@@ -56,21 +62,21 @@ export default function Home() {
     };
   }, [refreshHealth]);
 
-  // global shortcuts: Ctrl+K palette, g+tab quick nav
+  // global shortcuts: Ctrl+K palette, ? shortcuts help
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setPaletteOpen((o) => !o);
+      } else if (e.key === "?" && !/input|textarea/i.test((e.target as HTMLElement)?.tagName || "")) {
+        setHelpOpen((o) => !o);
       }
     };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
   }, []);
 
-  const unlock = (t: string) => {
-    setSessionToken(t || ""); // "" = guest mode
-  };
+  const unlock = (t: string) => setSessionToken(t || ""); // "" = guest mode
 
   const enableAdmin = () => {
     const k = prompt("Admin key:");
@@ -92,6 +98,8 @@ export default function Home() {
       label: "Go to " + t.label,
       run: () => setTab(t.id as Tab),
     })),
+    { id: "notif", icon: "🔔", label: "Open notifications", run: () => setNotifOpen(true) },
+    { id: "help", icon: "⌨", label: "Keyboard shortcuts", run: () => setHelpOpen(true) },
     {
       id: "admin-toggle",
       icon: "🛡",
@@ -106,7 +114,7 @@ export default function Home() {
         if (sessionToken) {
           try {
             await api.vaultLock(userId, sessionToken);
-          } catch { /* token may be stateless-expired */ }
+          } catch { /* stateless token may be expired */ }
           setSessionToken("");
         }
       },
@@ -125,9 +133,7 @@ export default function Home() {
     <div>
       {!online && <div className="offbanner">⚠ You are offline — showing cached content</div>}
 
-      {!sessionToken && checked && (
-        <LockScreen userId={userId} onUnlock={unlock} />
-      )}
+      {!sessionToken && checked && <LockScreen userId={userId} onUnlock={unlock} />}
 
       <div style={{ filter: sessionToken !== null ? undefined : "blur(6px)", pointerEvents: sessionToken !== null ? undefined : "none", minHeight: "100vh" }}>
         <Shell
@@ -135,34 +141,50 @@ export default function Home() {
           active={tab}
           onNavigate={(id) => setTab(id as Tab)}
           headerExtra={
-            health ? (
-              <span className={`badge ${health.ai?.primary_reachable ? "ok" : "err"}`}>
-                ● {health.ai?.assistant ?? "AI"} {health.ai?.primary_reachable ? "online" : "offline"}
-              </span>
-            ) : (
-              <span className="badge err">● api offline</span>
-            )
+            <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              {health ? (
+                <span className={`badge ${health.ai?.primary_reachable ? "ok" : "err"}`}>
+                  ● {health.ai?.assistant ?? "AI"} {health.ai?.primary_reachable ? "online" : "offline"}
+                </span>
+              ) : (
+                <span className="badge err">● api offline</span>
+              )}
+              <button className="mini ghost bell" onClick={() => setNotifOpen(true)} aria-label="Notifications">
+                🔔{notifCount > 0 && <span className="dot">{notifCount}</span>}
+              </button>
+              <button className="mini ghost" onClick={() => setHelpOpen(true)} aria-label="Keyboard shortcuts">⌨</button>
+            </span>
           }
         >
           {tab === "panel" && (
-            <UserPanel
-              userId={userId}
-              sessionToken={sessionToken ?? ""}
-              onNavigate={(id) => setTab(id as Tab)}
-            />
+            <ErrorBoundary>
+              <UserPanel userId={userId} sessionToken={sessionToken ?? ""} onNavigate={(id) => setTab(id as Tab)} />
+            </ErrorBoundary>
           )}
-          {tab === "ask" && <AskView userId={userId} sessionToken={sessionToken ?? ""} />}
-          {tab === "archive" && <ArchiveView userId={userId} sessionToken={sessionToken ?? ""} />}
+          {tab === "ask" && (
+            <ErrorBoundary>
+              <AskView userId={userId} sessionToken={sessionToken ?? ""} />
+            </ErrorBoundary>
+          )}
+          {tab === "archive" && (
+            <ErrorBoundary>
+              <ArchiveView userId={userId} sessionToken={sessionToken ?? ""} />
+            </ErrorBoundary>
+          )}
           {tab === "vault" && (
-            <VaultView userId={userId} sessionToken={sessionToken ?? ""} onUnlock={setSessionToken} />
+            <ErrorBoundary>
+              <VaultView userId={userId} sessionToken={sessionToken ?? ""} onUnlock={setSessionToken} />
+            </ErrorBoundary>
           )}
-          {tab === "rooms" && <RoomsView userId={userId} />}
-          {tab === "graph" && <GraphView />}
-          {tab === "admin" && adminEnabled && <AdminPanel />}
+          {tab === "rooms" && <ErrorBoundary><RoomsView userId={userId} /></ErrorBoundary>}
+          {tab === "graph" && <ErrorBoundary><GraphView /></ErrorBoundary>}
+          {tab === "admin" && adminEnabled && <ErrorBoundary><AdminPanel /></ErrorBoundary>}
         </Shell>
       </div>
 
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} commands={commands} />
+      <NotificationCenter userId={userId} open={notifOpen} onClose={() => setNotifOpen(false)} onChanged={() => refreshNotifs()} />
+      <ShortcutsOverlay open={helpOpen} onClose={() => setHelpOpen(false)} />
     </div>
   );
 }
