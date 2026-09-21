@@ -58,11 +58,13 @@ def blob_to_vec(blob: bytes | str | None) -> list[float]:
 
 # ------------------------------------------------------------------- layer ---
 class Database:
-    """Async DB facade: PostgreSQL+pgvector when DATABASE_URL is set, else SQLite."""
+    """Async DB facade: PostgreSQL+pgvector when DATABASE_URL is set,
+    GitHub-backed persistent store when GITHUB_TOKEN is set, else SQLite."""
 
     def __init__(self) -> None:
         self._pg_pool: Any = None
         self._sqlite: Any = None
+        self._gh: Any = None
         self.mode: str = "embedded"
 
     async def connect(self) -> None:
@@ -81,8 +83,21 @@ class Database:
                 self.mode = "postgres+pgvector"
                 return
             except Exception as e:  # pragma: no cover - surfaced in server logs
-                print("[db] postgres init failed, falling back to sqlite:", repr(e))
+                print("[db] postgres init failed, falling back:", repr(e))
                 self._pg_pool = None
+        if settings.github_token:
+            try:
+                from .ghstore import GitHubStore
+
+                gh = GitHubStore()
+                h = await gh.health()
+                if h.get("ok"):
+                    self._gh = gh
+                    self.mode = "github-persistent"
+                    return
+                print("[db] github store unhealthy:", h)
+            except Exception as e:
+                print("[db] github store init failed:", repr(e))
         await self._sqlite_init()
         self.mode = "embedded-sqlite"
 
@@ -91,6 +106,29 @@ class Database:
             await self._pg_pool.close()
         if self._sqlite:
             await self._sqlite.close()
+        if self._gh:
+            await self._gh.close()
+
+    # ---------------------------------------------------- github-persistent --
+    async def gh_upsert(self, doc_id: str, library: str, title: str, content: str, meta: dict, embedding: list[float]) -> None:
+        assert self._gh
+        await self._gh.upsert_document(doc_id, library, title, content, meta, embedding)
+
+    async def gh_search(self, library: str, embedding: list[float], limit: int, query_text: str) -> list[dict]:
+        assert self._gh
+        return await self._gh.search(library, embedding, limit, query_text)
+
+    async def gh_fetch(self, doc_id: str) -> Optional[dict]:
+        assert self._gh
+        return await self._gh.fetch(doc_id)
+
+    async def gh_list(self, library: str, limit: int, offset: int) -> tuple[list[dict], int]:
+        assert self._gh
+        return await self._gh.list(library, limit, offset)
+
+    async def gh_delete(self, doc_id: str) -> bool:
+        assert self._gh
+        return await self._gh.delete(doc_id)
 
     # ------------------------------------------------------------- postgres --
     async def _pg_init_schema(self) -> None:
@@ -261,6 +299,8 @@ class Database:
         emb = embed_text(f"{title}\n{content}")
         if self.mode == "postgres+pgvector":
             await self.pg_upsert_document(doc_id, library, title, content, meta, emb)
+        elif self.mode == "github-persistent":
+            await self.gh_upsert(doc_id, library, title, content, meta, emb)
         else:
             await self.sqlite_upsert(doc_id, library, title, content, meta, emb)
         return {"id": doc_id, "library": library, "title": title, "dim": len(emb)}
@@ -269,24 +309,34 @@ class Database:
         emb = embed_text(query)
         if self.mode == "postgres+pgvector":
             return await self.pg_search(library, emb, limit, query)
+        if self.mode == "github-persistent":
+            return await self.gh_search(library, emb, limit, query)
         return await self.sqlite_search(library, emb, limit, query)
 
     async def fetch(self, doc_id: str) -> Optional[dict]:
         if self.mode == "postgres+pgvector":
             return await self.pg_fetch(doc_id)
+        if self.mode == "github-persistent":
+            return await self.gh_fetch(doc_id)
         return await self.sqlite_fetch(doc_id)
 
     async def list(self, library: str, limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
         if self.mode == "postgres+pgvector":
             return await self.pg_list(library, limit, offset)
+        if self.mode == "github-persistent":
+            return await self.gh_list(library, limit, offset)
         return await self.sqlite_list(library, limit, offset)
 
     async def delete(self, doc_id: str) -> bool:
         if self.mode == "postgres+pgvector":
             return await self.pg_delete(doc_id)
+        if self.mode == "github-persistent":
+            return await self.gh_delete(doc_id)
         return await self.sqlite_delete(doc_id)
 
     async def health(self) -> dict:
+        if self.mode == "github-persistent":
+            return await self._gh.health()
         return {"mode": self.mode, "ok": self._pg_pool is not None or self._sqlite is not None}
 
 

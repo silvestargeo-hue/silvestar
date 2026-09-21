@@ -85,6 +85,7 @@ class RedisCache:
 class Cache:
     def __init__(self) -> None:
         self._impl: Any = None
+        self._gh: Any = None  # persistent KV fallback (GitHub-backed)
 
     async def connect(self) -> None:
         if settings.has_redis:
@@ -95,15 +96,32 @@ class Cache:
             except Exception:
                 self._impl = None
         self._impl = MemoryCache()
+        if settings.github_token:
+            try:
+                from .ghstore import GitHubStore
+
+                gh = GitHubStore()
+                h = await gh.health()
+                if h.get("ok"):
+                    self._gh = gh
+            except Exception as e:
+                print("[cache] github kv init failed:", repr(e))
 
     async def get(self, key: str) -> Optional[str]:
-        return await self._impl.get(key)
+        v = await self._impl.get(key)
+        if v is None and self._gh:
+            v = await self._gh.kv_get("kv:" + key)
+        return v
 
     async def set(self, key: str, value: str, ttl: int | None = None) -> None:
         await self._impl.set(key, value, ttl)
+        if self._gh and ttl and ttl >= 300:
+            await self._gh.kv_set("kv:" + key, value, ttl)  # persist only long-lived values
 
     async def delete(self, key: str) -> None:
         await self._impl.delete(key)
+        if self._gh:
+            await self._gh.kv_delete("kv:" + key)
 
     async def incr(self, key: str, ttl: int | None = None) -> int:
         return await self._impl.incr(key, ttl)

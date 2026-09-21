@@ -26,6 +26,9 @@ class Settings:
     )
     # --- Module 8: cache ---
     redis_url: str = field(default_factory=lambda: os.getenv("REDIS_URL", ""))
+    # --- Persistent GitHub-backed store (used when no Postgres/Redis) ---
+    github_token: str = field(default_factory=lambda: os.getenv("GITHUB_TOKEN", ""))
+    github_data_repo: str = field(default_factory=lambda: os.getenv("GITHUB_DATA_REPO", "silvestargeo-hue/silvestar-data"))
     # --- Module 7: graph ---
     neo4j_url: str = field(default_factory=lambda: os.getenv("NEO4J_URL", ""))
     neo4j_user: str = field(default_factory=lambda: os.getenv("NEO4J_USER", "neo4j"))

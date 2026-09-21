@@ -125,6 +125,8 @@ class AuthService:
             verification = {"required": False}
         else:
             verification = {"required": True, "expires_in": 86400}
+        # re-read so the response reflects the auto-verified record
+        user = self.public((await self._account(email)) or {})
         return {"user": user, "verification": verification}
 
     async def authenticate(self, email: str, password: str) -> dict:
