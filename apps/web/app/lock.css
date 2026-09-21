@@ -1,0 +1,168 @@
+/* ===== Lock screen & scenic backdrop ===== */
+.lockwrap {
+  position: fixed; inset: 0; z-index: 50;
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
+}
+
+/* ---------- scene ---------- */
+.scene { position: absolute; inset: 0; overflow: hidden; }
+
+.sky {
+  position: absolute; inset: 0;
+  background: linear-gradient(180deg, #aee3ff 0%, #d8ecff 38%, #f6f0dc 62%, #f3d9b0 78%, #ead9c2 100%);
+}
+.sun {
+  position: absolute; width: 340px; height: 340px; border-radius: 50%;
+  right: 12%; top: 8%;
+  background: radial-gradient(circle, rgba(255,241,196,0.95) 0%, rgba(255,214,130,0.5) 35%, rgba(255,214,130,0) 70%);
+  animation: sunPulse 6s ease-in-out infinite;
+}
+@keyframes sunPulse {
+  0%, 100% { transform: scale(1); opacity: 0.9; }
+  50% { transform: scale(1.06); opacity: 1; }
+}
+
+.clouds { position: absolute; top: 0; left: 0; width: 100%; height: 34%; }
+.cloud { animation: cloudDrift 46s linear infinite; }
+.cloud.c2 { animation-duration: 64s; animation-delay: -20s; }
+.cloud.c3 { animation-duration: 80s; animation-delay: -50s; }
+@keyframes cloudDrift {
+  from { transform: translateX(-360px); }
+  to { transform: translateX(1400px); }
+}
+
+.birds { position: absolute; top: 10%; left: 0; width: 60%; height: 20%; }
+.bird { animation: birdFly 26s linear infinite; }
+.bird.b2 { animation-duration: 34s; animation-delay: -12s; }
+.bird.b3 { animation-duration: 30s; animation-delay: -22s; }
+@keyframes birdFly {
+  from { transform: translate(-120px, 10px); }
+  50% { transform: translate(320px, -18px); }
+  to { transform: translate(760px, 6px); }
+}
+
+.mountains {
+  position: absolute; bottom: 26%; left: 0; width: 100%; height: 52%;
+}
+
+.water {
+  position: absolute; bottom: 0; left: 0; right: 0; height: 30%;
+  background: linear-gradient(180deg, #7fb2d9 0%, #5f97c4 45%, #4a7fae 100%);
+  overflow: hidden;
+}
+.shimmer {
+  position: absolute; height: 2px; border-radius: 2px;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.75), transparent);
+  animation: shimmerSlide 7s ease-in-out infinite;
+}
+.shimmer.s1 { width: 34%; top: 22%; left: 8%; }
+.shimmer.s2 { width: 46%; top: 45%; left: 40%; animation-delay: -2.4s; animation-duration: 9s; }
+.shimmer.s3 { width: 28%; top: 68%; left: 18%; animation-delay: -4.8s; animation-duration: 8s; }
+@keyframes shimmerSlide {
+  0% { transform: translateX(-60px); opacity: 0.25; }
+  50% { opacity: 0.85; }
+  100% { transform: translateX(90px); opacity: 0.25; }
+}
+
+.grass { position: absolute; bottom: 0; left: 0; width: 100%; height: 30%; }
+.blade { transform-origin: 50% 100%; animation: sway 4.2s ease-in-out infinite; }
+@keyframes sway {
+  0%, 100% { transform: rotate(-2.4deg); }
+  50% { transform: rotate(2.4deg); }
+}
+
+.traveler {
+  position: absolute; bottom: 24%; left: 18%;
+  width: clamp(90px, 12vw, 150px); height: auto;
+  animation: walkBob 1.1s ease-in-out infinite;
+}
+@keyframes walkBob {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  25% { transform: translateY(-4px) rotate(0.6deg); }
+  75% { transform: translateY(-2px) rotate(-0.6deg); }
+}
+.leg-a { animation: legA 1.1s ease-in-out infinite; transform-origin: 56px 132px; }
+.leg-b { animation: legB 1.1s ease-in-out infinite; transform-origin: 66px 132px; }
+@keyframes legA {
+  0%, 100% { transform: rotate(0deg); }
+  50% { transform: rotate(-16deg); }
+}
+@keyframes legB {
+  0%, 100% { transform: rotate(0deg); }
+  50% { transform: rotate(16deg); }
+}
+.arm { animation: armSwing 1.1s ease-in-out infinite; transform-origin: 52px 98px; }
+.arm-b { animation: armSwing 1.1s ease-in-out infinite reverse; transform-origin: 68px 98px; }
+@keyframes armSwing {
+  0%, 100% { transform: rotate(0deg); }
+  50% { transform: rotate(12deg); }
+}
+
+/* ---------- glass card ---------- */
+.lockcard {
+  position: relative; z-index: 2;
+  width: min(400px, 92vw);
+  padding: 30px 28px 22px;
+  border-radius: 20px;
+  background: rgba(14, 19, 32, 0.72);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  border: 1px solid rgba(124, 92, 255, 0.35);
+  box-shadow: 0 24px 70px rgba(5, 8, 20, 0.55), 0 0 0 1px rgba(255,255,255,0.04) inset;
+  text-align: center;
+  animation: cardIn 0.7s cubic-bezier(0.2, 0.9, 0.25, 1.2) both;
+}
+@keyframes cardIn {
+  from { opacity: 0; transform: translateY(26px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.lockcard.shake { animation: shake 0.45s cubic-bezier(.36,.07,.19,.97); }
+@keyframes shake {
+  10%, 90% { transform: translateX(-2px); }
+  20%, 80% { transform: translateX(4px); }
+  30%, 50%, 70% { transform: translateX(-7px); }
+  40%, 60% { transform: translateX(7px); }
+}
+
+.locklogo { font-size: 40px; line-height: 1; margin-bottom: 6px; }
+.lockbrand h1 {
+  margin: 0; font-size: 24px; letter-spacing: 3px; text-transform: uppercase;
+  background: linear-gradient(90deg, var(--accent), var(--accent2));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.lockbrand p { color: var(--muted); font-size: 13px; margin: 8px 0 20px; }
+
+.lockinput {
+  text-align: center; letter-spacing: 2px; font-size: 15px;
+  background: rgba(11, 14, 20, 0.75); border: 1px solid var(--border);
+}
+.lockinput:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(124, 92, 255, 0.2); }
+
+.lockbtn {
+  width: 100%; margin-top: 12px; padding: 12px;
+  font-size: 15px; letter-spacing: 1px;
+}
+.lockbtn:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.lockerror { color: var(--err); font-size: 13px; margin-top: 10px; }
+
+.lockrow {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-top: 16px; gap: 8px; flex-wrap: wrap;
+}
+.linkish {
+  background: none; border: none; color: var(--accent2);
+  font-size: 12.5px; padding: 0; cursor: pointer;
+}
+.linkish:hover { text-decoration: underline; }
+.linkish.dim { color: var(--muted); }
+
+.lockhint {
+  margin-top: 18px; padding-top: 14px; border-top: 1px solid rgba(255,255,255,0.07);
+  color: var(--muted); font-size: 11px; letter-spacing: 0.6px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cloud, .bird, .shimmer, .blade, .traveler, .leg-a, .leg-b, .arm, .sun { animation: none !important; }
+}

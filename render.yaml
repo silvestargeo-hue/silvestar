@@ -1,0 +1,32 @@
+# Render blueprint — deploy API + Web with one click from the repo.
+# Push this repo to GitHub, then: render.com → New → Blueprint → select repo.
+databases:
+  - name: silvestar-db
+    databaseName: silvestar
+    plan: free
+
+services:
+  - type: web
+    name: silvestar-api
+    runtime: python
+    rootDir: services/api
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers
+    healthCheckPath: /health
+    plan: free
+    envVars:
+      - key: SILVESTAR_SECRET
+        generateValue: true
+      - key: PYTHON_VERSION
+        value: "3.12"
+
+  - type: web
+    name: silvestar-web
+    runtime: node
+    rootDir: apps/web
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    plan: free
+    envVars:
+      - key: NEXT_PUBLIC_API_URL
+        value: https://silvestar-api.onrender.com

@@ -1,0 +1,81 @@
+# Silvestar Platform — full stack with real infrastructure.
+#   docker compose -f infra/docker-compose.yml up -d --build
+# API runs with DATABASE_URL/REDIS_URL/NEO4J_URL pointing at real services;
+# embedded fallbacks are used only when a URL is absent.
+name: silvestar
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: silvestar
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-silvestar_dev}
+      POSTGRES_DB: silvestar
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U silvestar"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  neo4j:
+    image: neo4j:5
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-silvestar_dev}
+    volumes:
+      - neo4jdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  api:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.api
+    environment:
+      SILVESTAR_SECRET: ${SILVESTAR_SECRET:-change-me-in-prod}
+      DATABASE_URL: postgresql://silvestar:${POSTGRES_PASSWORD:-silvestar_dev}@db:5432/silvestar
+      REDIS_URL: redis://redis:6379/0
+      NEO4J_URL: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-silvestar_dev}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      LIVEKIT_URL: ${LIVEKIT_URL:-}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
+    ports:
+      - "8000:8000"
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      neo4j: { condition: service_healthy }
+
+  web:
+    build:
+      context: ../apps/web
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+  redisdata:
+  neo4jdata:
