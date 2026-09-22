@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import struct
 from typing import Any, Optional
 
@@ -75,9 +76,10 @@ class Database:
                 self._pg_pool = await asyncpg.create_pool(
                     settings.database_url,
                     min_size=1,
-                    max_size=8,
+                    max_size=int(os.getenv("SILVESTAR_DB_POOL_MAX", "8")),
                     command_timeout=30,
                     statement_cache_size=0,  # required behind pgbouncer (Supabase/Vercel poolers)
+                    **({"ssl": True} if "sslmode" not in settings.database_url else {}),
                 )
                 await self._pg_init_schema()
                 self.mode = "postgres+pgvector"

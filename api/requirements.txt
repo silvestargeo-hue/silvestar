@@ -1,0 +1,11 @@
+# Serverless-only deps (the full services/api/requirements.txt installs
+# compiled drivers that push the lambda over Vercel's 250MB unpacked limit;
+# the app's embedded fallbacks cover everything not listed here).
+fastapi>=0.115
+pydantic>=2.9
+httpx>=0.27
+orjson>=3.10
+cryptography>=43
+asyncpg>=0.29
+aiosqlite>=0.20
+numpy>=2.0
