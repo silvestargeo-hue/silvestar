@@ -48,6 +48,11 @@ services:
         value: ""
       - key: SMTP_TLS
         value: "1"
+      # Resend HTTPS email (overrides SMTP when set) — paste key at deploy time
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_FROM
+        value: "Silvestar <onboarding@resend.dev>"
       - key: PYTHON_VERSION
         value: "3.12"
 
