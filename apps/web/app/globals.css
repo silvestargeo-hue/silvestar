@@ -38,6 +38,14 @@ button {
 }
 button:hover { filter: brightness(1.15); }
 button:active { transform: scale(.97); }
+
+/* audit fix: primitives used by dialogs & panels that were previously unstyled */
+.btn { padding: 10px 16px; border-radius: 10px; border: 1px solid var(--border); background: var(--panel2); color: var(--text); font-weight: 600; cursor: pointer; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.notice { padding: 8px 12px; border-radius: 8px; font-size: 13px; }
+.notice.err { background: rgba(255, 92, 122, .12); color: var(--err); border: 1px solid rgba(255, 92, 122, .35); }
+.pm-overlay { position: fixed; inset: 0; z-index: 40; background: transparent; }
+.profile-menu { z-index: 41; }
 button.ghost { background: var(--panel2); border: 1px solid var(--border); color: var(--text); }
 button.danger { background: transparent; border: 1px solid var(--err); color: var(--err); }
 button.mini { min-height: 32px; padding: 4px 10px; font-size: 12.5px; border-radius: 8px; }

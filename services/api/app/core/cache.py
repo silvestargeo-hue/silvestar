@@ -83,6 +83,9 @@ class RedisCache:
 
 
 class Cache:
+    # only these key families are worth persisting across serverless cold starts
+    PERSIST_PREFIXES = ("otp:", "vc:", "otpc:", "notif:", "vault:revoke:")
+
     def __init__(self) -> None:
         self._impl: Any = None
         self._gh: Any = None  # persistent KV fallback (GitHub-backed)
@@ -115,8 +118,11 @@ class Cache:
 
     async def set(self, key: str, value: str, ttl: int | None = None) -> None:
         await self._impl.set(key, value, ttl)
-        if self._gh and ttl and ttl >= 300:
-            await self._gh.kv_set("kv:" + key, value, ttl)  # persist only long-lived values
+        if (
+            self._gh and ttl and ttl >= 300
+            and key.startswith(self.PERSIST_PREFIXES)
+        ):
+            await self._gh.kv_set("kv:" + key, value, ttl)
 
     async def delete(self, key: str) -> None:
         await self._impl.delete(key)

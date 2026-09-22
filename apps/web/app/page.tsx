@@ -15,7 +15,7 @@ import { CommandPalette, type Cmd } from "@/components/CommandPalette";
 import { NotificationCenter, useNotificationCount } from "@/components/NotificationCenter";
 import { ShortcutsOverlay } from "@/components/ShortcutsOverlay";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { useOnline, useTheme, toast } from "@/lib/kit";
+import { useOnline, useTheme, toast, Modal } from "@/lib/kit";
 import "./lock.css";
 
 type Tab = "panel" | "ask" | "archive" | "vault" | "rooms" | "graph" | "admin";
@@ -102,17 +102,35 @@ export default function Home() {
     return () => window.removeEventListener("keydown", h);
   }, []);
 
-  const changePassword = async () => {
-    const oldPw = prompt("Current password:");
-    if (!oldPw) return;
-    const newPw = prompt("New password (min 8 chars):");
-    if (!newPw || newPw.length < 8) return;
+  const [dialog, setDialog] = useState<null | { kind: "name" } | { kind: "pass" }>(null);
+  const [dv1, setDv1] = useState("");
+  const [dv2, setDv2] = useState("");
+  const [dErr, setDErr] = useState("");
+
+  const openRename = () => { setDv1(user?.display_name || ""); setDv2(""); setDErr(""); setDialog({ kind: "name" }); };
+  const openPass = () => { setDv1(""); setDv2(""); setDErr(""); setDialog({ kind: "pass" }); };
+
+  const submitRename = async () => {
+    if (!dv1.trim()) { setDErr("Name can't be empty"); return; }
     try {
-      const r = await api.authPassword(authToken, oldPw, newPw);
+      const r = await api.authProfile(authToken, dv1.trim());
+      persist(authToken, r.user);
+      toast("Profile updated ✓", "ok");
+      setDialog(null);
+    } catch (e) {
+      setDErr(String(e instanceof Error ? e.message : e).replace(/^\d+:\s*/, ""));
+    }
+  };
+
+  const submitPass = async () => {
+    if (dv2.length < 8) { setDErr("New password must be at least 8 characters"); return; }
+    try {
+      const r = await api.authPassword(authToken, dv1, dv2);
       persist(r.session_token, r.user); // fresh token replaces the dead one
       toast("Password changed — other sessions signed out", "ok");
+      setDialog(null);
     } catch (e) {
-      toast(String(e instanceof Error ? e.message : e).replace(/^\d+:\s*/, ""), "err");
+      setDErr(String(e instanceof Error ? e.message : e).replace(/^\d+:\s*/, ""));
     }
   };
 
@@ -132,8 +150,8 @@ export default function Home() {
     ...visibleTabs.map((t) => ({ id: "go-" + t.id, icon: t.icon, label: "Go to " + t.label, run: () => setTab(t.id as Tab) })),
     { id: "notif", icon: "🔔", label: "Open notifications", run: () => setNotifOpen(true) },
     { id: "help", icon: "⌨", label: "Keyboard shortcuts", run: () => setHelpOpen(true) },
-    { id: "rename", icon: "👤", label: "Edit profile name", run: renameProfile },
-    { id: "pass", icon: "🔑", label: "Change password", run: changePassword },
+    { id: "rename", icon: "👤", label: "Edit profile name", run: () => { setMenuOpen(false); openRename(); } },
+    { id: "pass", icon: "🔑", label: "Change password", run: () => { setMenuOpen(false); openPass(); } },
     { id: "theme", icon: "🌓", label: "Toggle theme", run: toggleTheme },
     { id: "signout", icon: "🚪", label: "Sign out", run: signOut },
   ];
@@ -162,20 +180,23 @@ export default function Home() {
                 {user.role === "admin" ? " 🛡" : ""}
               </button>
               {menuOpen && (
-                <div className="profile-menu" onMouseLeave={() => setMenuOpen(false)}>
+                <>
+                <div className="pm-overlay" onClick={() => setMenuOpen(false)} />
+                <div className="profile-menu">
                   <div className="pm-head">
                     <div className="pm-name">{user.display_name || user.email.split("@")[0]}</div>
                     <div className="pm-mail">{user.email}</div>
                     <div className="pm-role">{user.role === "admin" ? "🛡 Administrator" : "Member"} · {user.status}</div>
                   </div>
-                  <button className="side-link" onClick={() => { renameProfile(); setMenuOpen(false); }}><span className="si">👤</span> Edit profile</button>
-                  <button className="side-link" onClick={() => { changePassword(); setMenuOpen(false); }}><span className="si">🔑</span> Change password</button>
+                  <button className="side-link" onClick={() => { openRename(); }}><span className="si">👤</span> Edit profile</button>
+                  <button className="side-link" onClick={() => { openPass(); }}><span className="si">🔑</span> Change password</button>
                   <button className="side-link" onClick={() => { toggleTheme(); setMenuOpen(false); }}><span className="si">{theme === "dark" ? "☀️" : "🌙"}</span> Toggle theme</button>
                   {user.role === "admin" && (
                     <button className="side-link" onClick={() => { setTab("admin"); setMenuOpen(false); }}><span className="si">🛡</span> Admin panel</button>
                   )}
                   <button className="side-link pm-out" onClick={signOut}><span className="si">🚪</span> Sign out</button>
                 </div>
+                </>
               )}
             </div>
           </span>
@@ -209,6 +230,31 @@ export default function Home() {
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} commands={commands} />
       <NotificationCenter userId={user.user_id} open={notifOpen} onClose={() => setNotifOpen(false)} onChanged={() => refreshNotifs()} />
       <ShortcutsOverlay open={helpOpen} onClose={() => setHelpOpen(false)} />
+
+      {dialog?.kind === "name" && (
+        <Modal title="👤 Edit profile" onClose={() => setDialog(null)}>
+          <input value={dv1} onChange={(e) => setDv1(e.target.value)} placeholder="Display name"
+            maxLength={60} style={{ width: "100%" }} aria-label="Display name" />
+          {dErr && <div className="notice err" style={{ marginTop: 8 }}>{dErr}</div>}
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
+            <button className="ghost" onClick={() => setDialog(null)}>Cancel</button>
+            <button className="btn primary" onClick={submitRename}>Save</button>
+          </div>
+        </Modal>
+      )}
+      {dialog?.kind === "pass" && (
+        <Modal title="🔑 Change password" onClose={() => setDialog(null)}>
+          <input type="password" value={dv1} onChange={(e) => setDv1(e.target.value)}
+            placeholder="Current password" autoComplete="current-password" style={{ width: "100%", marginBottom: 10 }} aria-label="Current password" />
+          <input type="password" value={dv2} onChange={(e) => setDv2(e.target.value)}
+            placeholder="New password (min 8 chars)" autoComplete="new-password" style={{ width: "100%" }} aria-label="New password" />
+          {dErr && <div className="notice err" style={{ marginTop: 8 }}>{dErr}</div>}
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
+            <button className="ghost" onClick={() => setDialog(null)}>Cancel</button>
+            <button className="btn primary" onClick={submitPass}>Update password</button>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

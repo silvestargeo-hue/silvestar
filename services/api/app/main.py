@@ -13,6 +13,8 @@ Modules:
 """
 from __future__ import annotations
 
+import asyncio
+import hmac
 import time
 from contextlib import asynccontextmanager
 from typing import Optional
@@ -211,7 +213,8 @@ async def vault_create(body: VaultCreateIn):
 
 
 @app.post("/api/v1/vault/unlock", tags=["vault"])
-async def vault_unlock(body: VaultUnlockIn):
+async def vault_unlock(body: VaultUnlockIn, request: Request):
+    await _rate_limit("vault-unlock", body.user_id, limit=10, window_s=300)
     try:
         return await vault.unlock(body.user_id, body.password)
     except VaultError as e:
@@ -343,7 +346,7 @@ async def graph_stats():
 # ------------------------------------------- Modules 10-11: Admin/User panels ---
 async def _require_admin(request: Request) -> None:
     key = request.headers.get("x-admin-key", "")
-    if key and key == settings.admin_key:
+    if key and hmac.compare_digest(key.encode(), settings.admin_key.encode()):
         return
     authz = request.headers.get("authorization", "")
     if authz.startswith("Bearer "):
@@ -699,6 +702,29 @@ class SessionIn(BaseModel):
     session_token: str
 
 
+# ---------------------------------------------- audit fix: rate limiting ---
+def _client_ip(request: Request) -> str:
+    fwd = request.headers.get("x-forwarded-for", "")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+async def _rate_limit(scope: str, key: str, limit: int, window_s: int) -> None:
+    """Fixed-window limiter (Redis/in-process via cache, plus GitHub KV persistence).
+
+    Raises 429 when `key` exceeds `limit` events within `window_s` for `scope`.
+    Protects login/register/OTP endpoints from brute force and email bombing.
+    """
+    bucket = f"rate:{scope}:{key}"
+    try:
+        n = await cache.incr(bucket, ttl=window_s)
+    except Exception:
+        n = 1
+    if n > limit:
+        raise HTTPException(429, "too many attempts — please wait a bit and try again")
+
+
 async def _current_user(session_token: str) -> dict:
     user = await auth.validate_session(session_token)
     if not user:
@@ -707,7 +733,8 @@ async def _current_user(session_token: str) -> dict:
 
 
 @app.post("/api/v1/auth/register", tags=["auth"])
-async def auth_register(body: RegisterIn):
+async def auth_register(body: RegisterIn, request: Request):
+    await _rate_limit("register", _client_ip(request), limit=5, window_s=3600)
     try:
         r = await auth.register(body.email, body.password, body.display_name)
         user = r["user"]
@@ -720,7 +747,8 @@ async def auth_register(body: RegisterIn):
 
 
 @app.post("/api/v1/auth/login", tags=["auth"])
-async def auth_login(body: LoginIn):
+async def auth_login(body: LoginIn, request: Request):
+    await _rate_limit("login", _client_ip(request), limit=10, window_s=300)
     try:
         acct = await auth.authenticate(body.email, body.password)
     except AuthError as e:
@@ -787,7 +815,10 @@ async def auth_password(body: PasswordChangeIn):
 
 
 @app.post("/api/v1/auth/forgot", tags=["auth"])
-async def auth_forgot(body: OtpRequestIn):
+async def auth_forgot(body: OtpRequestIn, request: Request):
+    # email-bomb protection: per-IP and per-address caps
+    await _rate_limit("forgot-ip", _client_ip(request), limit=5, window_s=3600)
+    await _rate_limit("forgot-addr", body.email.strip().lower(), limit=3, window_s=3600)
     r = await auth.request_reset(body.email)
     await _audit("auth.otp_request", body.email)
     return r
@@ -828,10 +859,11 @@ async def admin_users(request: Request):
     await _require_admin(request)
     rows, total = await db.list(ACCOUNTS_LIB, limit=500)
     users = []
-    for r in rows:
-        # db.list rows carry only id/title/snippet — fetch the full record for meta
-        doc = await db.fetch(r["id"])
-        m = (doc or r).get("meta", {})
+    # parallel fetches (audit fix: was sequential N+1)
+    docs = await asyncio.gather(*[db.fetch(r["id"]) for r in rows])
+    metas = [(doc or r).get("meta", {}) for doc, r in zip(docs, rows)]
+    vcounts = await asyncio.gather(*[auth.vault_doc_count(m.get("user_id", "")) for m in metas])
+    for r, m, vc in zip(rows, metas, vcounts):
         users.append({
             "email": r["id"].split("::", 1)[1],
             "user_id": m.get("user_id", ""),
@@ -841,7 +873,7 @@ async def admin_users(request: Request):
             "created": m.get("created", ""),
             "verified": bool(m.get("verified", False)),
             "last_login": m.get("last_login", ""),
-            "vault_documents": await auth.vault_doc_count(m.get("user_id", "")),
+            "vault_documents": vc,
         })
     users.sort(key=lambda u: (u["role"] != "admin", u["created"]))
     return {"total": total, "users": users}

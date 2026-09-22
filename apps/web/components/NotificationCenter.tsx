@@ -8,6 +8,7 @@ import { Modal, toast } from "@/lib/kit";
 export function useNotificationCount(userId: string) {
   const [count, setCount] = useState(0);
   const refresh = useCallback(async () => {
+    if (!userId) return; // signed out — don't poll as "anon"
     try {
       const r = await api.notifications(userId);
       setCount(r.notifications.length);
@@ -15,9 +16,10 @@ export function useNotificationCount(userId: string) {
   }, [userId]);
   useEffect(() => {
     refresh();
+    if (!userId) return;
     const t = setInterval(refresh, 30000);
     return () => clearInterval(t);
-  }, [refresh]);
+  }, [refresh, userId]);
   return { count, refresh };
 }
 

@@ -86,8 +86,15 @@ def main() -> int:
         "GET", "/api/v1/archive/search?q=livecheck"))[:120])
 
     # --- Module 5: vault create/unlock/seal + cross-library retrieval ---
-    check("vault create", lambda: call("POST", "/api/v1/vault/create", {
-        "user_id": "liveuser", "password": "pw123456"})["created"])
+    def _vault_create():
+        try:
+            return call("POST", "/api/v1/vault/create", {
+                "user_id": "liveuser", "password": "pw123456"})["created"]
+        except urllib.error.HTTPError as e:
+            if e.code == 409:
+                return "exists (persistent db) ✓"
+            raise
+    check("vault create", _vault_create)
     token = call("POST", "/api/v1/vault/unlock", {
         "user_id": "liveuser", "password": "pw123456"})["session_token"]
     check("vault unlock (session)", lambda: "session_token ok")
@@ -164,6 +171,12 @@ def main() -> int:
             "email": em, "code": vcode})["user"]["verified"])
     check("auth register (first=admin)", lambda: reg["user"]["role"])
     ahdr = {"Authorization": "Bearer " + reg["session_token"]}
+    # on a persistent DB this user may not be the first account — promote via
+    # the admin key so subsequent admin-session checks hold (no-op when already admin)
+    try:
+        call("POST", f"/api/v1/admin/users/{em}/promote", None, headers=admin)
+    except Exception:
+        pass
     check("auth login", lambda: call("POST", "/api/v1/auth/login", {
         "email": em, "password": "Passw0rd!23"})["user"]["email"])
     check("auth remember 30d", lambda: f"{call('POST', '/api/v1/auth/login', {
