@@ -49,6 +49,12 @@ class Settings:
     ai_timeout: float = field(default_factory=lambda: float(os.getenv("AI_TIMEOUT", "20")))
     ai_budget_s: float = field(default_factory=lambda: float(os.getenv("AI_BUDGET_S", "45")))
     puter_proxy_url: str = field(default_factory=lambda: os.getenv("PUTER_PROXY_URL", ""))
+    # --- Real AI providers (free tiers) — key present => engine joins the chain ---
+    groq_api_key: str = field(default_factory=lambda: os.getenv("GROQ_API_KEY", ""))
+    groq_model: str = field(default_factory=lambda: os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"))
+    gemini_api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
+    gemini_model: str = field(default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-2.0-flash"))
+    openrouter_api_key: str = field(default_factory=lambda: os.getenv("OPENROUTER_API_KEY", ""))
     # --- Security ---
     secret_key: str = field(default_factory=lambda: os.getenv("SECRET_KEY", "silvestar-dev-secret-change-me"))
     admin_key: str = field(default_factory=lambda: os.getenv("SILVESTAR_ADMIN_KEY", "silvestar-admin"))

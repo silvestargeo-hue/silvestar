@@ -51,6 +51,62 @@ class SilvestarAI:
                     await __import__("asyncio").sleep(1.5)
         return None
 
+    async def _groq(self, messages: list[dict]) -> str | None:
+        """Groq free tier — fast Llama models. Used when GROQ_API_KEY is set."""
+        if not settings.groq_api_key:
+            return None
+        try:
+            async with httpx.AsyncClient(timeout=settings.ai_timeout) as client:
+                r = await client.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {settings.groq_api_key}"},
+                    json={"model": settings.groq_model, "messages": messages, "stream": False},
+                )
+                if r.status_code == 200:
+                    return r.json()["choices"][0]["message"]["content"]
+        except Exception:
+            pass
+        return None
+
+    async def _gemini(self, messages: list[dict]) -> str | None:
+        """Google Gemini free tier via OpenAI-compatible endpoint."""
+        if not settings.gemini_api_key:
+            return None
+        try:
+            async with httpx.AsyncClient(timeout=settings.ai_timeout) as client:
+                r = await client.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+                    headers={"Authorization": f"Bearer {settings.gemini_api_key}"},
+                    json={"model": settings.gemini_model, "messages": messages, "stream": False},
+                )
+                if r.status_code == 200:
+                    return r.json()["choices"][0]["message"]["content"]
+        except Exception:
+            pass
+        return None
+
+    async def _openrouter(self, messages: list[dict]) -> str | None:
+        """OpenRouter free models (key optional for some models)."""
+        try:
+            headers = {"Content-Type": "application/json"}
+            if settings.openrouter_api_key:
+                headers["Authorization"] = f"Bearer {settings.openrouter_api_key}"
+            async with httpx.AsyncClient(timeout=settings.ai_timeout) as client:
+                for model in ("meta-llama/llama-3.3-70b-instruct:free", "deepseek/deepseek-chat-v3-0324:free"):
+                    try:
+                        r = await client.post(
+                            "https://openrouter.ai/api/v1/chat/completions",
+                            headers=headers,
+                            json={"model": model, "messages": messages, "stream": False},
+                        )
+                        if r.status_code == 200:
+                            return r.json()["choices"][0]["message"]["content"]
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        return None
+
     async def _get_completion(self, prompt: str) -> str | None:
         try:
             async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
@@ -132,7 +188,10 @@ class SilvestarAI:
             pass
         effective_model = override_model or settings.ai_model
         engines = [
+            ("groq", lambda: self._groq(messages)),
+            ("gemini", lambda: self._gemini(messages)),
             ("openai-compatible", lambda: self._post_openai(messages, effective_model)),
+            ("openrouter-free", lambda: self._openrouter(messages)),
             ("pollinations-get", lambda: self._get_completion(question + context_suffix)),
             ("puter-proxy", lambda: self._puter_proxy(messages)),
         ]
@@ -162,6 +221,7 @@ class SilvestarAI:
         except Exception:
             primary_ok = False
         return {"assistant": self.name, "keyless": True, "primary_reachable": primary_ok,
+                "groq": bool(settings.groq_api_key), "gemini": bool(settings.gemini_api_key),
                 "fallback": "local-extractive always available"}
 
 

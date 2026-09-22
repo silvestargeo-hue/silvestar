@@ -293,3 +293,38 @@ footer.pf { margin-top: 30px; color: var(--muted); font-size: 12px; text-align: 
   .utable tr { border: 1px solid var(--border); border-radius: 12px; margin-bottom: 8px; padding: 8px; }
   .utable td { border: 0; padding: 4px 8px; }
 }
+
+/* ============================== Library (file manager) ================== */
+.crumbs { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin: 10px 0; font-size: 13px; }
+.folder-grid { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; padding: 10px; border: 1px dashed var(--border); border-radius: 12px; }
+.folder-chip { display: inline-flex; gap: 6px; align-items: center; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--card, rgba(127,127,127,.06)); cursor: pointer; font-size: 13px; }
+.folder-chip:hover { transform: translateY(-1px); }
+.drop-hint { margin: 10px 0; padding: 18px; text-align: center; border: 2px dashed var(--accent, #8a05ff); border-radius: 12px; color: var(--accent, #8a05ff); font-weight: 600; }
+.file-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-top: 12px; }
+.file-card { display: flex; flex-direction: column; gap: 6px; padding: 12px; border: 1px solid var(--border); border-radius: 14px; background: var(--card, rgba(127,127,127,.05)); }
+.file-open { display: flex; flex-direction: column; align-items: center; gap: 6px; background: none; border: 0; cursor: pointer; text-align: center; padding: 4px; }
+.file-icon { font-size: 34px; line-height: 1; }
+.file-name { font-size: 12.5px; font-weight: 600; word-break: break-word; max-width: 100%; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.file-meta { text-align: center; }
+.file-actions { display: flex; gap: 4px; justify-content: center; flex-wrap: wrap; }
+.file-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 12px; }
+.file-table th { text-align: left; color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .6px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.file-table td { padding: 10px; border-bottom: 1px solid var(--border); }
+.viewer { display: flex; flex-direction: column; gap: 8px; }
+.viewer-frame { width: 76vw; max-width: 900px; height: 68vh; border: 1px solid var(--border); border-radius: 10px; background: #fff; }
+.viewer-img { max-width: 76vw; max-height: 60vh; border-radius: 10px; object-fit: contain; background: #111; }
+.viewer-text { max-height: 60vh; overflow: auto; white-space: pre-wrap; font-size: 12.5px; line-height: 1.5; background: var(--card, rgba(127,127,127,.06)); padding: 12px; border-radius: 10px; }
+.design-bar { display: flex; align-items: center; gap: 6px; margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--border); }
+.swatch { width: 18px; height: 18px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; padding: 0; }
+.swatch.on { border-color: var(--accent, #fff); transform: scale(1.15); }
+.btn.tiny { padding: 3px 7px; font-size: 12px; border-radius: 8px; }
+.btn.danger { color: var(--err, #ef4444); }
+.big { font-size: 44px; }
+.empty { text-align: center; padding: 48px 12px; }
+@media (max-width: 720px) {
+  .file-table, .file-table tbody, .file-table tr, .file-table td { display: block; }
+  .file-table thead { display: none; }
+  .file-table tr { border: 1px solid var(--border); border-radius: 12px; margin-bottom: 8px; padding: 6px; }
+  .file-table td { border: 0; padding: 3px 8px; }
+  .viewer-frame { width: 86vw; height: 56vh; }
+}

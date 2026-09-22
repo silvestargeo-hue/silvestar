@@ -8,6 +8,7 @@ import { VaultView } from "@/components/VaultView";
 import { AskView } from "@/components/AskView";
 import { RoomsView } from "@/components/RoomsView";
 import { GraphView } from "@/components/GraphView";
+import { LibraryView } from "@/components/LibraryView";
 import { UserPanel } from "@/components/UserPanel";
 import { AdminPanel } from "@/components/AdminPanel";
 import { Shell, type NavTab } from "@/components/Shell";
@@ -18,11 +19,12 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useOnline, useTheme, toast, Modal } from "@/lib/kit";
 import "./lock.css";
 
-type Tab = "panel" | "ask" | "archive" | "vault" | "rooms" | "graph" | "admin";
+type Tab = "panel" | "ask" | "library" | "archive" | "vault" | "rooms" | "graph" | "admin";
 
 const TABS: NavTab[] = [
   { id: "panel", label: "Dashboard", icon: "🏠" },
   { id: "ask", label: "Ask Silvestar", icon: "🤖" },
+  { id: "library", label: "Library", icon: "🗂" },
   { id: "archive", label: "Archive", icon: "📚" },
   { id: "vault", label: "Vault", icon: "🔒" },
   { id: "rooms", label: "Rooms", icon: "🎙" },
@@ -210,6 +212,11 @@ export default function Home() {
         {tab === "ask" && (
           <ErrorBoundary>
             <AskView userId={user.user_id} sessionToken={vaultSession} />
+          </ErrorBoundary>
+        )}
+        {tab === "library" && (
+          <ErrorBoundary>
+            <LibraryView userId={user.user_id} sessionToken={authToken} />
           </ErrorBoundary>
         )}
         {tab === "archive" && (

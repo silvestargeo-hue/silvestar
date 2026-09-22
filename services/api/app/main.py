@@ -28,6 +28,8 @@ from .core import rag, security
 from .core.ai import ai
 from .core.cache import cache
 from .core.db import db
+from .core.files import files as file_store
+from .core.file_routes import router as files_router
 from .core.graph import graph
 from .core.realtime import Client, hub, livekit
 from .core.vault import VaultError, vault
@@ -42,9 +44,11 @@ async def lifespan(app: FastAPI):
     await db.close()
     await cache.close()
     await graph.close()
+    await file_store.close()
 
 
 app = FastAPI(title=settings.app_name, version=settings.version, lifespan=lifespan)
+app.include_router(files_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
