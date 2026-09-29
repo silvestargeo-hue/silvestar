@@ -231,7 +231,7 @@ export default function Home() {
             <SettingsView
               user={user}
               authToken={authToken}
-              onUserUpdate={(u) => persist(authToken, u)}
+              onUserUpdate={(u, newToken) => persist(newToken || authToken, u)}
               lockOn={lockOn}
               onToggleLock={(on) => { setLockOn(on); localStorage.setItem("sv-lock-on", on ? "1" : "0"); }}
               onLockNow={() => setLocked(true)}

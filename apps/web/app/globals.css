@@ -422,12 +422,12 @@ footer.pf { margin-top: 30px; color: var(--muted); font-size: 12px; text-align: 
 .set-row:last-child { border-bottom: 0; }
 .set-t { font-weight: 600; font-size: 14px; }
 .set-d { color: var(--muted); font-size: 12.5px; margin-top: 2px; max-width: 560px; }
-.swatch-row { display: flex; gap: 8px; flex-wrap: wrap; }
-.swatch {
+.accent-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.accent-swatch {
   width: 26px; height: 26px; border-radius: 999px; cursor: pointer;
   border: 2px solid transparent; outline: 2px solid transparent; transition: outline-color .12s ease;
 }
-.swatch.sel { outline-color: var(--text); }
+.accent-swatch.sel { outline-color: var(--text); }
 
 @media (max-width: 900px) {
   .dhead { display: none; }

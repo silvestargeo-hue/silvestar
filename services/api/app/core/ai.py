@@ -92,7 +92,11 @@ class SilvestarAI:
             if settings.openrouter_api_key:
                 headers["Authorization"] = f"Bearer {settings.openrouter_api_key}"
             async with httpx.AsyncClient(timeout=settings.ai_timeout) as client:
-                for model in ("meta-llama/llama-3.3-70b-instruct:free", "deepseek/deepseek-chat-v3-0324:free"):
+                for model in (
+                    "nvidia/nemotron-3-super-120b-a12b:free",
+                    "nvidia/nemotron-3.5-lightning:free",
+                    "google/gemma-4-31b-it:free",
+                ):
                     try:
                         r = await client.post(
                             "https://openrouter.ai/api/v1/chat/completions",

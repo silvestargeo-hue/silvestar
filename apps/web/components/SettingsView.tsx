@@ -38,7 +38,7 @@ function useAccent() {
 }
 
 export function SettingsView({ user, authToken, onUserUpdate, lockOn, onToggleLock, onLockNow }: {
-  user: AuthUser; authToken: string; onUserUpdate: (u: AuthUser) => void;
+  user: AuthUser; authToken: string; onUserUpdate: (u: AuthUser, newToken?: string) => void;
   lockOn: boolean; onToggleLock: (on: boolean) => void; onLockNow: () => void;
 }) {
   const { theme, toggle: toggleTheme } = useTheme();
@@ -70,10 +70,8 @@ export function SettingsView({ user, authToken, onUserUpdate, lockOn, onToggleLo
     if (dv2.length < 8) { setDErr("New password must be at least 8 characters"); return; }
     try {
       const r = await api.authPassword(authToken, dv1, dv2);
-      // token rotates on password change — persist via reload payload
-      localStorage.setItem("sv-session", r.session_token);
-      localStorage.setItem("sv-user", JSON.stringify(r.user));
-      onUserUpdate(r.user);
+      // token rotates on password change — swap in the fresh session
+      onUserUpdate(r.user, r.session_token);
       toast("Password changed — other sessions signed out", "ok");
       setDialog(null);
     } catch (e) {
@@ -102,11 +100,11 @@ export function SettingsView({ user, authToken, onUserUpdate, lockOn, onToggleLo
             <div className="set-t">Accent color</div>
             <div className="set-d">Used for buttons, links and highlights.</div>
           </div>
-          <div className="swatch-row">
+          <div className="accent-row">
             {ACCENTS.map((a) => (
               <button
                 key={a.color}
-                className={`swatch ${accent === a.color ? "sel" : ""}`}
+                className={`accent-swatch ${accent === a.color ? "sel" : ""}`}
                 style={{ background: a.color }}
                 onClick={() => applyAccent(a.color)}
                 aria-label={`Accent ${a.name}`}
