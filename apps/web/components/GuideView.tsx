@@ -88,6 +88,17 @@ export function GuideView({ onNavigate }: { onNavigate: (id: string) => void }) 
       </div>
 
       <div className="card">
+        <h2>🛰 JARVIS OS</h2>
+        <div className="set-row">
+          <div>
+            <div className="set-t">Your AI operating system</div>
+            <div className="set-d">Companion desktop in the browser — AI chat, image lab, terminal, notes, themes. Silvestar is built in as an app.</div>
+          </div>
+          <button className="btn ghost" onClick={() => window.open("https://silvestargeo-hue.github.io/jarvis-os/", "_blank", "noopener")}>Open ↗</button>
+        </div>
+      </div>
+
+      <div className="card">
         <h2>🗄 Where your data lives</h2>
         <div className="set-row"><div><div className="set-t">Files</div><div className="set-d">Stored in your GitHub data repository — private, free, no size metering beyond the 40 MB per-file limit.</div></div></div>
         <div className="set-row"><div><div className="set-t">Documents & accounts</div><div className="set-d">Postgres database (Neon free tier) — never expires.</div></div></div>
