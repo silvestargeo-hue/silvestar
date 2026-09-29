@@ -708,6 +708,7 @@ class LoginIn(BaseModel):
     email: str
     password: str
     remember: bool = False
+    totp: str = ""
 
 
 class VerifyIn(BaseModel):
@@ -791,6 +792,10 @@ async def auth_login(body: LoginIn, request: Request):
         acct = await auth.authenticate(body.email, body.password)
     except AuthError as e:
         raise HTTPException(401, str(e))
+    # 2FA challenge: if the account has TOTP enabled, a valid code is required
+    if acct.get("totp_secret"):
+        if not auth._totp_verify(acct.get("totp_secret", ""), body.totp):
+            raise HTTPException(401, "2FA_CODE_REQUIRED")
     ttl = SESSION_TTL_REMEMBER if body.remember else SESSION_TTL
     token = auth.issue_auth_token(acct, ttl)
     await auth.touch_login(body.email)
@@ -807,6 +812,55 @@ async def auth_verify(body: VerifyIn):
         raise HTTPException(400, str(e))
     await _audit("auth.verified", body.email)
     return {"user": user}
+
+
+# ---------------------------------------------------------------- 2FA ------
+class TwoFAIn(BaseModel):
+    session_token: str
+    code: str = ""
+
+
+def _acct_meta_snapshot(acct: dict) -> dict:
+    return dict(acct)
+
+
+@app.post("/api/v1/auth/2fa/setup", tags=["auth"])
+async def auth_2fa_setup(body: TwoFAIn):
+    user = await _current_user(body.session_token)
+    try:
+        r = await auth.twofa_setup(user["email"])
+    except AuthError as e:
+        raise HTTPException(400, str(e))
+    await _audit("auth.2fa_setup_started", user["email"])
+    return r
+
+
+@app.post("/api/v1/auth/2fa/confirm", tags=["auth"])
+async def auth_2fa_confirm(body: TwoFAIn):
+    user = await _current_user(body.session_token)
+    try:
+        r = await auth.twofa_confirm(user["email"], body.code)
+    except AuthError as e:
+        raise HTTPException(400, str(e))
+    await _audit("auth.2fa_enabled", user["email"])
+    return r
+
+
+@app.post("/api/v1/auth/2fa/disable", tags=["auth"])
+async def auth_2fa_disable(body: TwoFAIn):
+    user = await _current_user(body.session_token)
+    try:
+        r = await auth.twofa_disable(user["email"], body.code)
+    except AuthError as e:
+        raise HTTPException(400, str(e))
+    await _audit("auth.2fa_disabled", user["email"])
+    return r
+
+
+@app.get("/api/v1/auth/2fa/status", tags=["auth"])
+async def auth_2fa_status(session_token: str = Query("")):
+    user = await _current_user(session_token)
+    return await auth.twofa_status(user["email"])
 
 
 @app.post("/api/v1/auth/verify/resend", tags=["auth"])

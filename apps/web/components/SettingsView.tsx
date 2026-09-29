@@ -7,6 +7,8 @@ import { api, type AuthUser } from "@/lib/api";
 import { toast, Modal, useOnline, useTheme } from "@/lib/kit";
 import { LANGS, useI18n, setLang, type Lang } from "@/lib/i18n";
 
+const API = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
+
 const ACCENTS: { name: string; color: string }[] = [
   { name: "Violet", color: "#7c5cff" },
   { name: "Cyan", color: "#00d4ff" },
@@ -36,6 +38,96 @@ function useAccent() {
     document.documentElement.style.setProperty("--accent", c);
   };
   return { accent, apply };
+}
+
+function TwoFACard({ authToken, email }: { authToken: string; email: string }) {
+  const [status, setStatus] = useState<{ enabled: boolean; pending: boolean } | null>(null);
+  const [secret, setSecret] = useState("");
+  const [uri, setUri] = useState("");
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const load = () => {
+    fetch(`${API}/api/v1/auth/2fa/status?session_token=${encodeURIComponent(authToken)}`)
+      .then((r) => r.json())
+      .then(setStatus).catch(() => {});
+  };
+  useEffect(load, [authToken]);
+
+  const post = async (path: string, code2: string) => {
+    setBusy(true);
+    try {
+      const r = await fetch(`${API}/api/v1/auth/2fa/${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_token: authToken, code: code2 }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.detail || "failed");
+      return j;
+    } catch (e) {
+      toast(String(e instanceof Error ? e.message : e).replace(/^\d+:\s*/, ""), "err");
+      return null;
+    } finally { setBusy(false); }
+  };
+
+  const start = async () => {
+    const j = await post("setup", "");
+    if (j) { setSecret(j.secret); setUri(j.otpauth_uri); }
+  };
+
+  const confirm = async () => {
+    const j = await post("confirm", code.trim());
+    if (j) { toast("2FA enabled ✓", "ok"); setSecret(""); setUri(""); setCode(""); load(); }
+  };
+
+  const disable = async () => {
+    const j = await post("disable", code.trim());
+    if (j) { toast("2FA disabled", "ok"); setCode(""); load(); }
+  };
+
+  if (!status) return null;
+  return (
+    <div className="set-row">
+      <div>
+        <div className="set-t">Two-factor app codes (TOTP)</div>
+        <div className="set-d">
+          {status.enabled ? "Enabled — login asks for a 6-digit code from your authenticator." :
+           status.pending ? "Setup started — scan the key, then enter a code to confirm." :
+           "Add an extra layer: after password, enter a rotating 6-digit code."}
+        </div>
+        {uri && (
+          <div className="notice" style={{ marginTop: 8, wordBreak: "break-all" }}>
+            <div><b>Secret key:</b> <code>{secret}</code></div>
+            <div style={{ marginTop: 4 }}>
+              Add it in Google Authenticator / Authy / Aegis via “enter setup key”, then confirm below.
+            </div>
+            <input className="input" readOnly value={uri} onFocus={(e) => e.currentTarget.select()} style={{ marginTop: 6 }} />
+          </div>
+        )}
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {status.enabled ? (
+          <>
+            <input className="input" placeholder="Current 6-digit code" value={code}
+              onChange={(e) => setCode(e.target.value)} style={{ width: 170 }} />
+            <button className="btn danger" disabled={busy || code.trim().length !== 6} onClick={disable}>Disable 2FA</button>
+          </>
+        ) : (
+          <>
+            {!uri && <button className="btn ghost" disabled={busy} onClick={start}>Enable 2FA</button>}
+            {uri && (
+              <>
+                <input className="input" placeholder="6-digit code" value={code}
+                  onChange={(e) => setCode(e.target.value)} style={{ width: 170 }} />
+                <button className="btn primary" disabled={busy || code.trim().length !== 6} onClick={confirm}>Confirm & enable</button>
+              </>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export function SettingsView({ user, authToken, onUserUpdate, lockOn, onToggleLock, onLockNow }: {
@@ -153,7 +245,8 @@ export function SettingsView({ user, authToken, onUserUpdate, lockOn, onToggleLo
 
       {/* -------------------------------------------------------- security */}
       <div className="card">
-        <h2>🔐 Security & Lock</h2>
+        <h2>🔐 Security & 2FA</h2>
+        <TwoFACard authToken={authToken} email={user.email} />
         <div className="set-row">
           <div>
             <div className="set-t">Lock screen on start</div>

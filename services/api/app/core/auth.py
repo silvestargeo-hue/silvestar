@@ -18,6 +18,7 @@ import json
 import re
 import secrets
 import time
+import urllib.parse
 import uuid
 from typing import Optional
 
@@ -69,6 +70,7 @@ class AuthService:
             "created": m.get("created", ""),
             "verified": bool(m.get("verified", False)),
             "last_login": m.get("last_login", ""),
+            "totp_secret": m.get("totp_secret", ""),
         }
 
     @staticmethod
@@ -170,6 +172,81 @@ class AuthService:
             return None
 
     # ------------------------------------------------------------ profile --
+    # ------------------------------------------------------------- TOTP 2FA --
+    @staticmethod
+    def _totp_code(secret_b32: str, timestep: int | None = None) -> str:
+        """RFC 6238 TOTP, 6 digits, SHA-1, 30s step (stdlib-only)."""
+        step = timestep if timestep is not None else int(time.time()) // 30
+        key = base64.b32decode(secret_b32 + "=" * ((8 - len(secret_b32) % 8) % 8), casefold=True)
+        msg = step.to_bytes(8, "big")
+        digest = hmac.new(key, msg, hashlib.sha1).digest()
+        off = digest[-1] & 0x0F
+        code = (int.from_bytes(digest[off:off + 4], "big") & 0x7FFFFFFF) % 1_000_000
+        return f"{code:06d}"
+
+    async def twofa_setup(self, email: str) -> dict:
+        """Generate a TOTP secret + otpauth URI; staged until first valid code confirms it."""
+        acct = await self._account(email)
+        if not acct:
+            raise AuthError("account not found")
+        secret_b32 = base64.b32encode(secrets.token_bytes(20)).decode().rstrip("=")
+        doc = await db.fetch(_doc_id(email))
+        meta = doc.get("meta", {})
+        meta["totp_pending"] = secret_b32
+        await db.upsert_document(_doc_id(email), ACCOUNTS_LIB, doc["title"], acct["hash"], meta=meta)
+        label = urllib.parse.quote(f"Silvestar:{email}")
+        issuer = urllib.parse.quote("Silvestar")
+        return {
+            "secret": secret_b32,
+            "otpauth_uri": f"otpauth://totp/{label}?secret={secret_b32}&issuer={issuer}&algorithm=SHA1&digits=6&period=30",
+        }
+
+    async def twofa_confirm(self, email: str, code: str) -> dict:
+        acct = await self._account(email)
+        if not acct:
+            raise AuthError("account not found")
+        doc = await db.fetch(_doc_id(email))
+        meta = doc.get("meta", {})
+        pending = meta.get("totp_pending", "")
+        if not pending:
+            raise AuthError("no pending 2FA setup — start it first")
+        if not self._totp_verify(pending, code):
+            raise AuthError("code did not match — try the next one")
+        meta["totp_secret"] = pending
+        meta.pop("totp_pending", None)
+        await db.upsert_document(_doc_id(email), ACCOUNTS_LIB, doc["title"], acct["hash"], meta=meta)
+        return {"enabled": True}
+
+    async def twofa_disable(self, email: str, code: str) -> dict:
+        acct = await self._account(email)
+        if not acct:
+            raise AuthError("account not found")
+        doc = await db.fetch(_doc_id(email))
+        meta = doc.get("meta", {})
+        secret = meta.get("totp_secret", "")
+        if not secret or not self._totp_verify(secret, code):
+            raise AuthError("code did not match — 2FA still enabled")
+        meta.pop("totp_secret", None)
+        meta.pop("totp_pending", None)
+        await db.upsert_document(_doc_id(email), ACCOUNTS_LIB, doc["title"], acct["hash"], meta=meta)
+        return {"enabled": False}
+
+    def _totp_verify(self, secret_b32: str, code: str, window: int = 1) -> bool:
+        """Accept the previous, current, or next timestep (clock drift)."""
+        code = (code or "").strip()
+        if not code.isdigit() or len(code) != 6:
+            return False
+        now = int(time.time()) // 30
+        return any(self._totp_code(secret_b32, now + d) == code for d in range(-window, window + 1))
+
+    async def twofa_status(self, email: str) -> dict:
+        acct = await self._account(email)
+        if not acct:
+            raise AuthError("account not found")
+        doc = await db.fetch(_doc_id(email))
+        meta = doc.get("meta", {})
+        return {"enabled": bool(meta.get("totp_secret")), "pending": bool(meta.get("totp_pending"))}
+
     async def update_display_name(self, email: str, display_name: str) -> dict:
         acct = await self._account(email)
         if not acct:
