@@ -19,6 +19,7 @@ export function AuthScreen({ onAuthed, initialMode }: {
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
+  const [needs2fa, setNeeds2fa] = useState(false);
   const [remember, setRemember] = useState(true);
   const [pendingVerify, setPendingVerify] = useState<{ email: string; token: string; user: AuthUser; devCode?: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -32,10 +33,16 @@ export function AuthScreen({ onAuthed, initialMode }: {
     e.preventDefault();
     setBusy(true); setError("");
     try {
-      const r = await api.authLogin(email.trim(), password, remember);
+      const r = await api.authLogin(email.trim(), password, remember, code.trim(), needs2fa);
+      setNeeds2fa(false);
       onAuthed(r.session_token, r.user);
     } catch (err) {
-      setError(String(err instanceof Error ? err.message : err).replace(/^\d+:\s*/, ""));
+      const m = String(err instanceof Error ? err.message : err).replace(/^\d+:\s*/, "");
+      if (m.includes("2FA_CODE_REQUIRED")) {
+        setNeeds2fa(true);
+        setError("");
+        setNotice("Enter the 6-digit code from your authenticator app.");
+      } else setError(m);
     } finally { setBusy(false); }
   };
 
@@ -129,6 +136,11 @@ export function AuthScreen({ onAuthed, initialMode }: {
               placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} required />
             <input className="lockinput" type="password" name="password" autoComplete="current-password"
               placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+            {needs2fa && (
+              <input className="lockinput" type="text" inputMode="numeric" maxLength={6}
+                placeholder="6-digit 2FA code" value={code}
+                onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))} autoFocus />
+            )}
             <button className="lockbtn" type="submit" disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
             <label className="remember-row">
               <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />

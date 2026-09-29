@@ -168,9 +168,9 @@ export const api = {
     req<{ user: AuthUser; session_token: string; verification?: { required: boolean; dev_code?: string } }>("/api/v1/auth/register", {
       method: "POST", body: JSON.stringify({ email, password, display_name }),
     }),
-  authLogin: (email: string, password: string, remember = false) =>
+  authLogin: (email: string, password: string, remember = false, totp = "", sendTotp = false) =>
     req<{ user: AuthUser; session_token: string; expires_in: number; verified: boolean }>("/api/v1/auth/login", {
-      method: "POST", body: JSON.stringify({ email, password, remember }),
+      method: "POST", body: JSON.stringify({ email, password, remember, ...(sendTotp ? { totp } : {}) }),
     }),
   authVerify: (email: string, code: string) =>
     req<{ user: AuthUser }>("/api/v1/auth/verify", { method: "POST", body: JSON.stringify({ email, code }) }),
