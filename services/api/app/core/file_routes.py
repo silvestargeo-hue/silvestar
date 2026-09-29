@@ -140,6 +140,11 @@ class RestoreIn(BaseModel):
     ts: int
 
 
+class BulkIn(BaseModel):
+    paths: list[str]
+    folder: str = ""
+
+
 @router.post("/rename")
 async def rename(request: Request, body: RenameIn):
     uid = await _uid_async(request)
@@ -168,6 +173,33 @@ async def create_folder(request: Request, body: FolderIn):
 async def delete_file(request: Request, body: DeleteIn):
     uid = await _uid_async(request)
     return await files.delete_file(uid, body.path)
+
+
+# ------------------------------------------------------------ bulk actions --
+@router.post("/bulk-delete")
+async def bulk_delete(request: Request, body: BulkIn):
+    uid = await _uid_async(request)
+    results = []
+    for p in body.paths[:100]:
+        try:
+            await files.delete_file(uid, p)
+            results.append({"path": p, "ok": True})
+        except Exception as e:
+            results.append({"path": p, "ok": False, "error": str(e)[:120]})
+    return {"results": results, "deleted": sum(1 for r in results if r["ok"]), "failed": sum(1 for r in results if not r["ok"]) }
+
+
+@router.post("/bulk-move")
+async def bulk_move(request: Request, body: BulkIn):
+    uid = await _uid_async(request)
+    results = []
+    for p in body.paths[:100]:
+        try:
+            await files.move(uid, p, body.folder)
+            results.append({"path": p, "ok": True})
+        except Exception as e:
+            results.append({"path": p, "ok": False, "error": str(e)[:120]})
+    return {"results": results, "moved": sum(1 for r in results if r["ok"]), "failed": sum(1 for r in results if not r["ok"]) }
 
 
 # --------------------------------------------------------------- versions --

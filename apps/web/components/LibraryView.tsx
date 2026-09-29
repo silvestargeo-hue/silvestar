@@ -63,6 +63,7 @@ export function LibraryView({ userId, sessionToken }: { userId: string; sessionT
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [newFolderVal, setNewFolderVal] = useState("");
   const [dragOver, setDragOver] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [design, setDesign] = useState<{ accent: string; view: "grid" | "list" }>(
     () => { try { return JSON.parse(localStorage.getItem("sv-library-design") || '{"accent":"#8a05ff","view":"grid"}'); } catch { return { accent: "#8a05ff", view: "grid" as const }; } }
   );
@@ -86,7 +87,38 @@ export function LibraryView({ userId, sessionToken }: { userId: string; sessionT
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [folder, query, sessionToken, userId]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); setSelected(new Set()); }, [load]);
+
+  // ------------------------------------------------------- bulk selection --
+  const toggleSel = (path: string) => {
+    setSelected((prev) => {
+      const n = new Set(prev);
+      if (n.has(path)) n.delete(path); else n.add(path);
+      return n;
+    });
+  };
+  const clearSel = () => setSelected(new Set());
+
+  const bulkOp = async (kind: "delete" | "move", folderTo = "") => {
+    if (!selected.size) return;
+    if (kind === "delete" && !confirm(`Delete ${selected.size} file(s) permanently?`)) return;
+    setBusy(true);
+    try {
+      const r = await fetch(`${API}/api/v1/files/bulk-${kind}`, {
+        method: "POST",
+        headers: { ...authHeaders(sessionToken, userId), "Content-Type": "application/json" },
+        body: JSON.stringify({ paths: [...selected], folder: folderTo }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.detail || `${r.status}`);
+      const done = kind === "delete" ? j.deleted : j.moved;
+      toast(`${done} file(s) ${kind}d` + (j.failed ? `, ${j.failed} failed` : ""), j.failed ? "err" : "ok");
+      clearSel();
+      await load();
+    } catch (e) {
+      toast(String(e instanceof Error ? e.message : e), "err");
+    } finally { setBusy(false); }
+  };
 
   // ------------------------------------------------------------- uploads --
   const doUpload = async (list: FileList | null, bulk: boolean) => {
@@ -327,6 +359,17 @@ export function LibraryView({ userId, sessionToken }: { userId: string; sessionT
       {/* drop hint */}
       {dragOver && <div className="drop-hint">⬇ Drop files to upload{folder ? ` into ${folder}` : ""}</div>}
 
+      {/* bulk toolbar */}
+      {selected.size > 0 && (
+        <div className="bulk-bar">
+          <b>{selected.size}</b>&nbsp;selected
+          <button className="btn tiny" onClick={() => bulkOp("move", folder)}>{folder ? `Move here (${folder})` : "Move to root"}</button>
+          <button className="btn tiny" onClick={() => { const f2 = prompt("Move to folder (empty = root):", folder || ""); if (f2 !== null) bulkOp("move", f2); }}>➡ Move to…</button>
+          <button className="btn tiny danger" onClick={() => bulkOp("delete")}>🗑 Delete</button>
+          <button className="btn tiny ghost" onClick={clearSel}>Cancel</button>
+        </div>
+      )}
+
       {/* files */}
       {visible.length === 0 ? (
         <div className="empty">
@@ -337,7 +380,10 @@ export function LibraryView({ userId, sessionToken }: { userId: string; sessionT
       ) : design.view === "grid" ? (
         <div className="file-grid">
           {visible.map((f) => (
-            <div key={f.path} className="file-card" style={{ borderColor: design.accent + "22" }}>
+            <div key={f.path} className="file-card" style={{ borderColor: selected.has(f.path) ? design.accent : design.accent + "22" }}>
+              <label className="sel-box" title="Select">
+                <input type="checkbox" checked={selected.has(f.path)} onChange={() => toggleSel(f.path)} />
+              </label>
               <button className="file-open" onClick={() => openViewer(f)} title="View">
                 <span className="file-icon">{icon(f.mime, f.name)}</span>
                 <span className="file-name">{f.name}</span>
@@ -357,10 +403,11 @@ export function LibraryView({ userId, sessionToken }: { userId: string; sessionT
         </div>
       ) : (
         <table className="file-table">
-          <thead><tr><th>Name</th><th>Size</th><th>Folder</th><th>Uploaded</th><th></th></tr></thead>
+          <thead><tr><th></th><th>Name</th><th>Size</th><th>Folder</th><th>Uploaded</th><th></th></tr></thead>
           <tbody>
             {visible.map((f) => (
-              <tr key={f.path}>
+              <tr key={f.path} style={selected.has(f.path) ? { outline: `2px solid ${design.accent}` } : undefined}>
+                <td><input type="checkbox" aria-label={`Select ${f.name}`} checked={selected.has(f.path)} onChange={() => toggleSel(f.path)} /></td>
                 <td><button className="link" onClick={() => openViewer(f)}>{icon(f.mime, f.name)} {f.name}</button></td>
                 <td>{fmtSize(f.size)}</td>
                 <td>{f.folder || "—"}</td>
