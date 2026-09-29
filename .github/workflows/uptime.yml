@@ -1,0 +1,56 @@
+name: Uptime monitor
+
+on:
+  schedule:
+    - cron: "*/30 * * * *" # every 30 minutes
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check API + Web
+        id: check
+        run: |
+          API=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 https://silvestar-api.vercel.app/api/v1/health || echo 000)
+          WEB=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 https://silvestar-web.vercel.app || echo 000)
+          echo "api=$API" >> "$GITHUB_OUTPUT"
+          echo "web=$WEB" >> "$GITHUB_OUTPUT"
+          if [ "$API" != "200" ] || [ "$WEB" != "200" ]; then
+            echo "down=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open issue if down
+        if: steps.check.outputs.down == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const title = "🔴 Platform down — API " + "${{ steps.check.outputs.api }}" + " / Web " + "${{ steps.check.outputs.web }}";
+            const existing = await github.rest.issues.listForRepo({ owner, repo, state: "open", labels: "uptime" });
+            if (existing.data.length === 0) {
+              await github.rest.issues.create({
+                owner, repo,
+                title,
+                labels: ["uptime"],
+                body: "Uptime monitor detected a failure at " + new Date().toISOString() +
+                  "\n\n- API health: " + "${{ steps.check.outputs.api }}" +
+                  "\n- Web: " + "${{ steps.check.outputs.web }}" +
+                  "\n\nCheck Vercel dashboard for the latest deployment/runtime logs."
+              });
+            }
+
+      - name: Close issue when recovered
+        if: steps.check.outputs.down != 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const existing = await github.rest.issues.listForRepo({ owner, repo, state: "open", labels: "uptime" });
+            for (const issue of existing.data) {
+              await github.rest.issues.createComment({ owner, repo, issue_number: issue.number, body: "✅ Recovered at " + new Date().toISOString() });
+              await github.rest.issues.update({ owner, repo, issue_number: issue.number, state: "closed" });
+            }
