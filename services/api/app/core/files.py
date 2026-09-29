@@ -231,9 +231,12 @@ class FileStore:
 
     # ------------------------------------------------- rename / move / del --
     async def rename(self, user_id: str, path: str, new_name: str) -> dict:
-        return await self.move(user_id, path,
-                               (path.rsplit("/", 1)[0] if "/" in path else ""),
-                               new_name)
+        # `path` is the FULL stored path (files/<uid>/<folder>/<name>); move()
+        # expects a USER-RELATIVE folder, so strip the files/<uid>/ prefix first.
+        prefix = f"files/{_safe_segment(user_id)}/"
+        rel = path[len(prefix):] if path.startswith(prefix) else path
+        folder = rel.rsplit("/", 1)[0] if "/" in rel else ""
+        return await self.move(user_id, path, folder, new_name)
 
     async def move(self, user_id: str, path: str, new_folder: str, new_name: str = "") -> dict:
         idx = await self._user_index(user_id)
@@ -258,7 +261,19 @@ class FileStore:
         idx["files"][new_path] = new_meta
         if folder_clean and folder_clean not in idx["folders"]:
             idx["folders"].append(folder_clean)
+        self._prune_folders(idx, keep={folder_clean})
         await self._save_index(user_id, idx)
+        # keep the RAG index in sync with the new path
+        if meta.get("indexed"):
+            from .db import db
+            old_doc = await db.fetch("d-" + _fdoc_id(user_id, path)[2:])
+            if old_doc:
+                await db.upsert_document(
+                    "d-" + _fdoc_id(user_id, new_path)[2:], f"files:{user_id}",
+                    fname, old_doc.get("content", ""),
+                    meta={"kind": "file", "path": new_path, "mime": new_meta.get("mime", ""), "folder": folder_clean},
+                )
+                await db.delete("d-" + _fdoc_id(user_id, path)[2:])
         return {"id": _fdoc_id(user_id, new_path), **new_meta}
 
     async def delete_file(self, user_id: str, path: str) -> dict:
@@ -266,11 +281,19 @@ class FileStore:
         meta = idx["files"].get(path)
         ok = await self._delete_path(path)
         idx["files"].pop(path, None)
+        self._prune_folders(idx)
         await self._save_index(user_id, idx)
         # remove RAG doc too
         from .db import db
         await db.delete("d-" + _fdoc_id(user_id, path)[2:])
         return {"deleted": ok, "was_indexed": bool(meta and meta.get("indexed"))}
+
+    @staticmethod
+    def _prune_folders(idx: dict, keep: str | set[str] = "") -> None:
+        """Drop folder entries that no longer contain any file."""
+        keep_set = {keep} if isinstance(keep, str) else set(keep)
+        used = {f.get("folder", "") for f in idx["files"].values()} | keep_set
+        idx["folders"] = [f for f in idx.get("folders", []) if f in used]
 
     async def create_folder(self, user_id: str, folder: str) -> dict:
         folder_clean = "/".join(_safe_segment(s) for s in folder.split("/") if s.strip())

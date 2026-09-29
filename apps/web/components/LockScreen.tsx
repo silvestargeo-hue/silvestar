@@ -7,9 +7,11 @@ import { LockScene } from "./LockScene";
 export function LockScreen({
   userId,
   onUnlock,
+  onSignOut,
 }: {
   userId: string;
   onUnlock: (token: string) => void;
+  onSignOut?: () => void;
 }) {
   const [password, setPassword] = useState("");
   const [mode, setMode] = useState<"unlock" | "create">("unlock");
@@ -80,6 +82,11 @@ export function LockScreen({
           <button className="linkish dim" onClick={() => onUnlock("")}>
             Continue as guest
           </button>
+          {onSignOut && (
+            <button className="linkish dim" onClick={onSignOut}>
+              Sign out
+            </button>
+          )}
         </div>
 
         <div className="lockhint">

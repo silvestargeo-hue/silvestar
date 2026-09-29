@@ -1,6 +1,7 @@
 "use client";
 
-/** User Panel — personal dashboard: stats, recent documents, quick actions. */
+/** Home screen v2 — hero greeting, live stat tiles, one-tap quick actions,
+ *  and a getting-started card. Everything is real data from the API. */
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { StatTile } from "./Stat";
@@ -12,17 +13,38 @@ type Stats = {
   ai: { assistant: string; reachable: boolean };
 };
 
-export function UserPanel({ userId, sessionToken, onNavigate }: {
-  userId: string; sessionToken: string; onNavigate: (id: string) => void;
+type FileStats = { files: number; folders: number; bytes: number; indexed: number };
+
+const API = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
+
+function fmtBytes(n: number): string {
+  if (!n) return "0 B";
+  if (n < 1048576) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1048576).toFixed(1)} MB`;
+}
+
+function greeting(): string {
+  const h = new Date().getHours();
+  if (h < 5) return "Working late";
+  if (h < 12) return "Good morning";
+  if (h < 18) return "Good afternoon";
+  return "Good evening";
+}
+
+export function UserPanel({ userId, sessionToken, userName, onNavigate }: {
+  userId: string; sessionToken: string; userName?: string; onNavigate: (id: string) => void;
 }) {
   const [stats, setStats] = useState<Stats | null>(null);
+  const [fstats, setFstats] = useState<FileStats | null>(null);
 
   const load = useCallback(async () => {
+    try { setStats(await api.meStats(userId, sessionToken)); } catch { setStats(null); }
     try {
-      setStats(await api.meStats(userId, sessionToken));
-    } catch {
-      setStats(null);
-    }
+      const r = await fetch(`${API}/api/v1/files/stats`, {
+        headers: { "x-silvestar-user": userId },
+      });
+      if (r.ok) setFstats(await r.json());
+    } catch { setFstats(null); }
   }, [userId, sessionToken]);
 
   useEffect(() => {
@@ -35,17 +57,60 @@ export function UserPanel({ userId, sessionToken, onNavigate }: {
 
   return (
     <div>
+      <div className="home-hero">
+        <div className="home-hero-text">
+          <h1>{greeting()}{userName ? `, ${userName}` : ""} 👋</h1>
+          <p>Your files, documents and AI — all in one place. What would you like to do?</p>
+        </div>
+        <div className="home-hero-actions">
+          <button className="btn primary" onClick={() => onNavigate("ask")}>🤖 Ask Silvestar</button>
+          <button className="btn ghost" onClick={() => onNavigate("library")}>🗂 Open Library</button>
+        </div>
+      </div>
+
       <div className="tile-grid">
+        <StatTile icon="🗂" label="Library files" value={fstats ? fstats.files : "—"}
+          sub={fstats ? `${fmtBytes(fstats.bytes)} · ${fstats.indexed} AI-indexed` : "your uploads"}
+          trend={trend(fstats?.files ?? 3)} accent="var(--accent2)" />
         <StatTile icon="📚" label="Archive docs" value={stats?.archive_documents ?? "—"}
-          sub="public library" trend={trend(stats?.archive_documents ?? 5)} accent="var(--accent2)" />
+          sub="knowledge library" trend={trend(stats?.archive_documents ?? 5)} accent="var(--accent)" />
         <StatTile icon="🔒" label="Vault docs" value={stats ? (stats.vault_unlocked ? stats.vault_documents : "🔒") : "—"}
           sub={stats?.vault_unlocked ? "unlocked" : "locked"} trend={trend(stats?.vault_documents ?? 2)} accent="var(--warn)" />
         <StatTile icon="🤖" label="Silvestar AI" value={stats?.ai.reachable ? "online" : "—"}
           sub={stats?.ai.assistant ?? ""} trend={trend(6)} accent="var(--ok)" />
-        <StatTile icon="⚡" label="Platform" value="1.0.0" sub="all 9 modules" trend={trend(9)} />
       </div>
 
       <div className="grid2">
+        <div className="card">
+          <h2>⚡ Quick actions</h2>
+          <div className="qa-grid">
+            <button className="qa" onClick={() => onNavigate("ask")}>
+              <span className="qa-ic">🤖</span><span className="qa-t">Ask AI</span>
+              <span className="qa-d">Answers from your docs</span>
+            </button>
+            <button className="qa" onClick={() => onNavigate("library")}>
+              <span className="qa-ic">📤</span><span className="qa-t">Upload files</span>
+              <span className="qa-d">PDF, Word, images…</span>
+            </button>
+            <button className="qa" onClick={() => onNavigate("archive")}>
+              <span className="qa-ic">📚</span><span className="qa-t">Archive</span>
+              <span className="qa-d">Search everything</span>
+            </button>
+            <button className="qa" onClick={() => onNavigate("vault")}>
+              <span className="qa-ic">🔒</span><span className="qa-t">Vault</span>
+              <span className="qa-d">AES-256 private docs</span>
+            </button>
+            <button className="qa" onClick={() => onNavigate("rooms")}>
+              <span className="qa-ic">🎙</span><span className="qa-t">Rooms</span>
+              <span className="qa-d">Live voice & chat</span>
+            </button>
+            <button className="qa" onClick={() => onNavigate("graph")}>
+              <span className="qa-ic">🕸</span><span className="qa-t">Graph</span>
+              <span className="qa-d">See connections</span>
+            </button>
+          </div>
+        </div>
+
         <div className="card">
           <h2>🕒 Recent in Archive</h2>
           {stats?.recent_archive.length ? (
@@ -57,16 +122,8 @@ export function UserPanel({ userId, sessionToken, onNavigate }: {
           ) : (
             <div className="hint">Nothing published yet — add documents from the Archive tab.</div>
           )}
-        </div>
-
-        <div className="card">
-          <h2>⚡ Quick actions</h2>
-          <div className="row">
-            <button onClick={() => onNavigate("ask")}>🤖 Ask AI</button>
-            <button className="ghost" onClick={() => onNavigate("archive")}>📚 Archive</button>
-            <button className="ghost" onClick={() => onNavigate("vault")}>🔒 Vault</button>
-            <button className="ghost" onClick={() => onNavigate("rooms")}>🎙 Rooms</button>
-            <button className="ghost" onClick={() => onNavigate("graph")}>🕸 Graph</button>
+          <div className="notice" style={{ marginTop: 10 }}>
+            💡 Tip: press <b>Ctrl+K</b> anywhere to jump between sections, or <b>?</b> for all shortcuts.
           </div>
         </div>
       </div>
