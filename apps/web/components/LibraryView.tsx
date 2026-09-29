@@ -64,6 +64,9 @@ export function LibraryView({ userId, sessionToken }: { userId: string; sessionT
   const [newFolderVal, setNewFolderVal] = useState("");
   const [dragOver, setDragOver] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [dragPaths, setDragPaths] = useState<string[]>([]);
+  const [hoverFolder, setHoverFolder] = useState("");
+  const [zipping, setZipping] = useState(false);
   const [design, setDesign] = useState<{ accent: string; view: "grid" | "list" }>(
     () => { try { return JSON.parse(localStorage.getItem("sv-library-design") || '{"accent":"#8a05ff","view":"grid"}'); } catch { return { accent: "#8a05ff", view: "grid" as const }; } }
   );
@@ -102,22 +105,58 @@ export function LibraryView({ userId, sessionToken }: { userId: string; sessionT
   const bulkOp = async (kind: "delete" | "move", folderTo = "") => {
     if (!selected.size) return;
     if (kind === "delete" && !confirm(`Delete ${selected.size} file(s) permanently?`)) return;
+    await moveOrDelete(kind, [...selected], folderTo);
+    clearSel();
+  };
+
+  const moveOrDelete = async (kind: "delete" | "move", paths: string[], folderTo = "") => {
+    if (!paths.length) return;
+    if (kind === "delete" && !confirm(`Delete ${paths.length} file(s) permanently?`)) return;
     setBusy(true);
     try {
       const r = await fetch(`${API}/api/v1/files/bulk-${kind}`, {
         method: "POST",
         headers: { ...authHeaders(sessionToken, userId), "Content-Type": "application/json" },
-        body: JSON.stringify({ paths: [...selected], folder: folderTo }),
+        body: JSON.stringify({ paths, folder: folderTo }),
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.detail || `${r.status}`);
       const done = kind === "delete" ? j.deleted : j.moved;
-      toast(`${done} file(s) ${kind}d` + (j.failed ? `, ${j.failed} failed` : ""), j.failed ? "err" : "ok");
-      clearSel();
+      toast(`${done} file(s) ${kind === "move" ? "moved" : "deleted"}` + (j.failed ? `, ${j.failed} failed` : ""), j.failed ? "err" : "ok");
       await load();
     } catch (e) {
       toast(String(e instanceof Error ? e.message : e), "err");
     } finally { setBusy(false); }
+  };
+
+  const dropOnFolder = (folderTo: string) => {
+    if (!dragPaths.length) return;
+    moveOrDelete("move", dragPaths, folderTo);
+    setDragPaths([]);
+    setHoverFolder("");
+  };
+
+  const dragStart = (f: FileMeta) => {
+    // dragging a selected file drags the whole selection
+    setDragPaths(selected.has(f.path) && selected.size > 0 ? [...selected] : [f.path]);
+  };
+
+  const downloadZip = async () => {
+    setZipping(true);
+    try {
+      const r = await fetch(`${API}/api/v1/files/zip?folder=${encodeURIComponent(folder)}`,
+        { headers: authHeaders(sessionToken, userId) });
+      if (!r.ok) throw new Error(`${r.status}`);
+      const b = await r.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(b);
+      a.download = (folder ? folder.replace(/\//g, "-") : "library") + ".zip";
+      a.click();
+      URL.revokeObjectURL(a.href);
+      toast("ZIP downloaded ✓", "ok");
+    } catch (e) {
+      toast(String(e instanceof Error ? e.message : e), "err");
+    } finally { setZipping(false); }
   };
 
   // ------------------------------------------------------------- uploads --
@@ -321,6 +360,9 @@ export function LibraryView({ userId, sessionToken }: { userId: string; sessionT
           <button className="btn ghost" onClick={() => saveDesign({ ...design, view: design.view === "grid" ? "list" : "grid" })}>
             {design.view === "grid" ? "☰ List" : "▦ Grid"}
           </button>
+          <button className="btn ghost" disabled={zipping || !data.total} onClick={downloadZip} title="Download all files in view as ZIP">
+            {zipping ? "⏳ Zipping…" : "🗜 ZIP"}
+          </button>
           <button className="btn ghost" onClick={() => setNewFolderOpen(true)}>📁 New folder</button>
           <button className="btn ghost" disabled={busy} onClick={() => bulkRef.current?.click()}>⬆ Bulk upload</button>
           <button className="btn primary" disabled={busy} onClick={() => oneRef.current?.click()}>⬆ Upload</button>
@@ -349,8 +391,15 @@ export function LibraryView({ userId, sessionToken }: { userId: string; sessionT
       {folder === "" && data.folders.length > 0 && (
         <div className="folder-grid" style={{ borderColor: design.accent + "33" }}>
           {data.folders.map((f) => (
-            <button key={f} className="folder-chip" onClick={() => setFolder(f)} style={{ borderColor: design.accent + "55" }}>
+            <button key={f} className={`folder-chip ${hoverFolder === f ? "drop-hover" : ""}`}
+              onClick={() => setFolder(f)}
+              style={{ borderColor: hoverFolder === f ? design.accent : design.accent + "55" }}
+              onDragOver={(e) => { if (dragPaths.length) { e.preventDefault(); e.stopPropagation(); setHoverFolder(f); } }}
+              onDragLeave={() => setHoverFolder("")}
+              onDrop={(e) => { if (dragPaths.length) { e.preventDefault(); e.stopPropagation(); setDragOver(false); dropOnFolder(f); } }}
+            >
               📁 {f.split("/").pop()} <span className="muted small">({f.split("/").length > 1 ? f.split("/").slice(0, -1).join("/") + "/" : "root"})</span>
+              {hoverFolder === f && <span className="small"> ⬅ drop</span>}
             </button>
           ))}
         </div>
@@ -380,7 +429,12 @@ export function LibraryView({ userId, sessionToken }: { userId: string; sessionT
       ) : design.view === "grid" ? (
         <div className="file-grid">
           {visible.map((f) => (
-            <div key={f.path} className="file-card" style={{ borderColor: selected.has(f.path) ? design.accent : design.accent + "22" }}>
+            <div key={f.path} className={`file-card ${dragPaths.includes(f.path) ? "dragging" : ""}`}
+              style={{ borderColor: selected.has(f.path) ? design.accent : design.accent + "22" }}
+              draggable
+              onDragStart={(e) => { dragStart(f); e.dataTransfer.effectAllowed = "move"; }}
+              onDragEnd={() => { setDragPaths([]); setHoverFolder(""); }}
+            >
               <label className="sel-box" title="Select">
                 <input type="checkbox" checked={selected.has(f.path)} onChange={() => toggleSel(f.path)} />
               </label>

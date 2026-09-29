@@ -11,6 +11,9 @@ import urllib.parse
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, Response, UploadFile
 from pydantic import BaseModel
 
+import zipfile
+import io
+
 from .files import files
 
 router = APIRouter(prefix="/api/v1/files", tags=["files"])
@@ -173,6 +176,37 @@ async def create_folder(request: Request, body: FolderIn):
 async def delete_file(request: Request, body: DeleteIn):
     uid = await _uid_async(request)
     return await files.delete_file(uid, body.path)
+
+
+# ---------------------------------------------------------------- zip ------
+@router.get("/zip")
+async def zip_folder(request: Request, folder: str = Query("")):
+    """Download all files in a folder (or the whole library) as one ZIP."""
+    uid = await _uid_async(request)
+    listing = await files.list_files(uid, folder=folder)
+    if not listing["files"]:
+        raise HTTPException(404, "nothing to zip")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for f in listing["files"]:
+            got = await files.download(uid, f["path"])
+            if not got:
+                continue
+            data, _mime = got
+            name = f.get("name") or f["path"].rsplit("/", 1)[-1]
+            # keep folder structure relative to the zipped folder
+            rel = f["path"]
+            prefix = f"files/{uid}/{folder}".rstrip("/")
+            if rel.startswith(prefix + "/"):
+                rel = rel[len(prefix) + 1:]
+            z.writestr(rel or name, data)
+    buf.seek(0)
+    zname = (folder.replace("/", "-") if folder else "library") + ".zip"
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename={zname}"},
+    )
 
 
 # ------------------------------------------------------------ bulk actions --
