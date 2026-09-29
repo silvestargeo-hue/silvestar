@@ -121,6 +121,81 @@ class FileStore:
         import json as _j
         await cache.set(f"files-idx:{key}", _j.dumps(val), ttl=None)
 
+    # --------------------------------------------------------- share links --
+    async def create_share(self, user_id: str, path: str) -> dict:
+        """Create a revocable public share token for a file (KV + per-user index)."""
+        import secrets as _s
+        idx = await self._user_index(user_id)
+        if path not in idx["files"]:
+            raise FileNotFoundError("file not found")
+        meta = idx["files"][path]
+        tok = "sh" + _s.token_urlsafe(18)
+        rec = {"path": path, "user_id": user_id, "mime": meta.get("mime", ""),
+               "name": path.rsplit("/", 1)[-1], "created": int(time.time())}
+        await self._kv_set("share:" + tok, rec)
+        await self._remember_share(user_id, tok, rec)
+        return {"token": tok, "path": path, "name": rec["name"]}
+
+    async def revoke_share(self, user_id: str, token: str) -> dict:
+        rec = await self._kv_get("share:" + token)
+        if not rec or rec.get("user_id") != user_id:
+            raise FileNotFoundError("share not found")
+        from .cache import cache
+        await cache.delete("files-idx:share:" + token)
+        await self._forget_share(user_id, token)
+        return {"revoked": True}
+
+    async def list_shares(self, user_id: str) -> dict:
+        """List active shares for a user from the per-user index doc."""
+        from .db import db
+        import json as _j
+        idx_doc = await db.fetch("f-shareidx-" + user_id)
+        shares = {}
+        if idx_doc and isinstance(idx_doc.get("content"), str):
+            try:
+                shares = _j.loads(idx_doc["content"])
+            except Exception:
+                shares = {}
+        return {"shares": shares}
+
+    async def _remember_share(self, user_id: str, token: str, rec: dict) -> None:
+        from .db import db
+        import json as _j
+        doc_id = "f-shareidx-" + user_id
+        doc = await db.fetch(doc_id)
+        shares = {}
+        if doc and isinstance(doc.get("content"), str):
+            try:
+                shares = _j.loads(doc["content"])
+            except Exception:
+                shares = {}
+        shares[token] = rec
+        await db.upsert_document(doc_id, f"files:{user_id}", "share index", _j.dumps(shares), meta={"kind": "shareidx"})
+
+    async def _forget_share(self, user_id: str, token: str) -> None:
+        from .db import db
+        import json as _j
+        doc_id = "f-shareidx-" + user_id
+        doc = await db.fetch(doc_id)
+        if doc and isinstance(doc.get("content"), str):
+            try:
+                shares = _j.loads(doc["content"])
+                shares.pop(token, None)
+                await db.upsert_document(doc_id, f"files:{user_id}", "share index", _j.dumps(shares), meta={"kind": "shareidx"})
+            except Exception:
+                pass
+
+    async def resolve_share(self, token: str) -> Optional[tuple[bytes, str, str]]:
+        """Return (bytes, mime, name) for a valid share token, else None."""
+        rec = await self._kv_get("share:" + token)
+        if not rec or not rec.get("path"):
+            return None
+        data = await self._get_bytes(rec["path"])
+        if data is None:
+            return None
+        mime = rec.get("mime") or mimetypes.guess_type(rec["path"])[0] or "application/octet-stream"
+        return data, mime, rec.get("name", "file")
+
     # ------------------------------------------------------------ index ----
     async def _user_index(self, user_id: str) -> dict:
         """Persistent per-user index of files: {files: {path: meta}, folders: [..]}."""

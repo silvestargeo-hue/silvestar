@@ -5,7 +5,7 @@
  *  Files are stored on GitHub (free) and extracted text is AI-searchable. */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
-import { toast, Modal } from "@/lib/kit";
+import { toast, Modal, copyText } from "@/lib/kit";
 
 type FileMeta = {
   id: string; name: string; path: string; folder: string;
@@ -55,6 +55,7 @@ export function LibraryView({ userId, sessionToken }: { userId: string; sessionT
   const [renameVal, setRenameVal] = useState("");
   const [moveTarget, setMoveTarget] = useState<FileMeta | null>(null);
   const [moveVal, setMoveVal] = useState("");
+  const [shareUrl, setShareUrl] = useState("");
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [newFolderVal, setNewFolderVal] = useState("");
   const [dragOver, setDragOver] = useState(false);
@@ -183,6 +184,22 @@ export function LibraryView({ userId, sessionToken }: { userId: string; sessionT
     } catch { toast("Move failed", "err"); } finally { setBusy(false); }
   };
 
+  const doShare = async (f: FileMeta) => {
+    setBusy(true);
+    try {
+      const r = await fetch(`${API}/api/v1/files/share`, {
+        method: "POST",
+        headers: { ...authHeaders(sessionToken, userId), "Content-Type": "application/json" },
+        body: JSON.stringify({ path: f.path }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.detail || "share failed");
+      setShareUrl(j.url);
+    } catch (e) {
+      toast(String(e instanceof Error ? e.message : e).replace(/^\d+:\s*/, ""), "err");
+    } finally { setBusy(false); }
+  };
+
   const doDelete = async (f: FileMeta) => {
     if (!confirm(`Delete "${f.name}" permanently?`)) return;
     try {
@@ -289,9 +306,10 @@ export function LibraryView({ userId, sessionToken }: { userId: string; sessionT
               <div className="file-actions">
                 <button className="btn tiny" onClick={() => openViewer(f)} title="View">👁</button>
                 <button className="btn tiny" onClick={() => dl(f)} title="Download">⬇</button>
-                <button className="btn tiny" onClick={() => { setRenameTarget(f); setRenameVal(f.name); }} title="Rename">✏</button>
-                <button className="btn tiny" onClick={() => { setMoveTarget(f); setMoveVal(f.folder); }} title="Move to folder">➡</button>
-                <button className="btn tiny danger" onClick={() => doDelete(f)} title="Delete">🗑</button>
+              <button className="btn tiny" onClick={() => { setRenameTarget(f); setRenameVal(f.name); }} title="Rename">✏</button>
+              <button className="btn tiny" onClick={() => { setMoveTarget(f); setMoveVal(f.folder); }} title="Move to folder">➡</button>
+              <button className="btn tiny" onClick={() => doShare(f)} title="Public share link">🔗</button>
+              <button className="btn tiny danger" onClick={() => doDelete(f)} title="Delete">🗑</button>
               </div>
             </div>
           ))}
@@ -309,8 +327,9 @@ export function LibraryView({ userId, sessionToken }: { userId: string; sessionT
                 <td className="file-actions">
                   <button className="btn tiny" onClick={() => dl(f)}>⬇</button>
                   <button className="btn tiny" onClick={() => { setRenameTarget(f); setRenameVal(f.name); }}>✏</button>
-                  <button className="btn tiny" onClick={() => { setMoveTarget(f); setMoveVal(f.folder); }}>➡</button>
-                  <button className="btn tiny danger" onClick={() => doDelete(f)}>🗑</button>
+                <button className="btn tiny" onClick={() => { setMoveTarget(f); setMoveVal(f.folder); }}>➡</button>
+                <button className="btn tiny" onClick={() => doShare(f)} title="Public share link">🔗</button>
+                <button className="btn tiny danger" onClick={() => doDelete(f)}>🗑</button>
                 </td>
               </tr>
             ))}
@@ -334,6 +353,21 @@ export function LibraryView({ userId, sessionToken }: { userId: string; sessionT
               <button className="btn primary" onClick={() => dl(viewFile)}>⬇ Download</button>
               <span className="muted small">{fmtSize(viewFile.size)} · {viewFile.mime}{viewFile.indexed ? " · searchable by AI" : ""}</span>
             </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* share link modal */}
+      {shareUrl && (
+        <Modal title="🔗 Public share link" onClose={() => setShareUrl("")}>
+          <div className="muted small" style={{ marginBottom: 8 }}>
+            Anyone with this link can view this file. Revoke access by deleting the share in a future update, or contact support.
+          </div>
+          <input className="input" readOnly value={shareUrl} onFocus={(e) => e.currentTarget.select()} autoFocus />
+          <div className="row gap" style={{ marginTop: 12 }}>
+            <button className="btn primary" onClick={() => { copyText(shareUrl); toast("Link copied ✓", "ok"); }}>Copy link</button>
+            <button className="btn ghost" onClick={() => { window.open(shareUrl, "_blank", "noopener"); }}>Open</button>
+            <button className="btn ghost" onClick={() => setShareUrl("")}>Done</button>
           </div>
         </Modal>
       )}

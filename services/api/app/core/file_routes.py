@@ -126,6 +126,10 @@ class FolderIn(BaseModel):
     folder: str
 
 
+class ShareRevokeIn(BaseModel):
+    token: str
+
+
 @router.post("/rename")
 async def rename(request: Request, body: RenameIn):
     uid = await _uid_async(request)
@@ -154,3 +158,52 @@ async def create_folder(request: Request, body: FolderIn):
 async def delete_file(request: Request, body: DeleteIn):
     uid = await _uid_async(request)
     return await files.delete_file(uid, body.path)
+
+
+# ------------------------------------------------------------ share links --
+@router.post("/share")
+async def share_file(request: Request, body: DeleteIn):
+    """body.path = file path → returns {token, url} for a public share link."""
+    uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in to share files")
+    try:
+        r = await files.create_share(uid, body.path)
+    except FileNotFoundError:
+        raise HTTPException(404, "file not found")
+    base = str(request.base_url).rstrip("/")
+    return {**r, "url": f"{base}/api/v1/files/public/{r['token']}"}
+
+
+@router.get("/shares")
+async def shares(request: Request):
+    uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in to manage shares")
+    return await files.list_shares(uid)
+
+
+@router.post("/share/revoke")
+async def revoke_share(request: Request, body: ShareRevokeIn):
+    uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in to manage shares")
+    try:
+        return await files.revoke_share(uid, body.token)
+    except FileNotFoundError:
+        raise HTTPException(404, "share not found")
+
+
+@router.get("/public/{token}")
+async def public_download(request: Request, token: str):
+    """No-auth public access for a valid, unrevoked share token."""
+    got = await files.resolve_share(token)
+    if not got:
+        raise HTTPException(404, "link expired or revoked")
+    data, mime, name = got
+    safe = urllib.parse.quote(name)
+    return Response(
+        content=data,
+        media_type=mime,
+        headers={"Content-Disposition": f"inline; filename*=UTF-8''{safe}"},
+    )
