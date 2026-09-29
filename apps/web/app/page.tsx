@@ -208,6 +208,7 @@ export default function Home() {
           <ErrorBoundary>
             <UserPanel
               userId={user.user_id}
+              authToken={authToken}
               sessionToken={vaultSession}
               userName={user.display_name || user.email.split("@")[0]}
               onNavigate={(id) => setTab(id as Tab)}

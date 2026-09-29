@@ -16,21 +16,10 @@ from .files import files
 router = APIRouter(prefix="/api/v1/files", tags=["files"])
 
 
-def _uid(request: Request) -> str:
-    """Resolve the requesting user: Bearer session (preferred) else explicit header."""
-    authz = request.headers.get("authorization", "")
-    if authz.startswith("Bearer "):
-        try:
-            from .auth import auth as auth_svc
-
-            user = None
-            # validate_session is async; call inline below in handler instead
-        except Exception:
-            pass
-    return (request.headers.get("x-silvestar-user") or "anon").strip() or "anon"
-
-
 async def _uid_async(request: Request) -> str:
+    """Resolve the requesting user STRICTLY from a valid Bearer session.
+    The x-silvestar-user header is client-controlled and must never grant
+    access to another user's files (spoofing vulnerability, fixed)."""
     authz = request.headers.get("authorization", "")
     if authz.startswith("Bearer "):
         try:
@@ -43,7 +32,7 @@ async def _uid_async(request: Request) -> str:
                 return str(user["email"])
         except Exception:
             pass
-    return (request.headers.get("x-silvestar-user") or "anon").strip() or "anon"
+    return "anon"
 
 
 @router.get("")

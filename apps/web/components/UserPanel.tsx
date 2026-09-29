@@ -31,8 +31,8 @@ function greeting(): string {
   return "Good evening";
 }
 
-export function UserPanel({ userId, sessionToken, userName, onNavigate }: {
-  userId: string; sessionToken: string; userName?: string; onNavigate: (id: string) => void;
+export function UserPanel({ userId, authToken, sessionToken, userName, onNavigate }: {
+  userId: string; authToken: string; sessionToken: string; userName?: string; onNavigate: (id: string) => void;
 }) {
   const [stats, setStats] = useState<Stats | null>(null);
   const [fstats, setFstats] = useState<FileStats | null>(null);
@@ -41,7 +41,7 @@ export function UserPanel({ userId, sessionToken, userName, onNavigate }: {
     try { setStats(await api.meStats(userId, sessionToken)); } catch { setStats(null); }
     try {
       const r = await fetch(`${API}/api/v1/files/stats`, {
-        headers: { "x-silvestar-user": userId },
+        headers: authToken ? { Authorization: `Bearer ${authToken}` } : { "x-silvestar-user": userId },
       });
       if (r.ok) setFstats(await r.json());
     } catch { setFstats(null); }
