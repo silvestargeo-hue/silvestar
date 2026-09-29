@@ -1,6 +1,6 @@
 /* Silvestar service worker — app-shell caching, offline support. */
-const CACHE = "silvestar-v1";
-const SHELL = ["/", "/manifest.webmanifest"];
+const CACHE = "silvestar-v2";
+const SHELL = ["/", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

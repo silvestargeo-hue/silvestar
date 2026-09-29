@@ -65,6 +65,14 @@ export default function Home() {
   const online = useOnline();
   const { count: notifCount, refresh: refreshNotifs } = useNotificationCount(user?.user_id || "anon");
 
+  // PWA shortcuts / deep links land on /?tab=ask etc.
+  useEffect(() => {
+    const t = new URLSearchParams(window.location.search).get("tab") as Tab | null;
+    if (t && ["panel", "ask", "library", "archive", "vault", "rooms", "graph", "settings", "guide", "admin"].includes(t)) {
+      setTab(t);
+    }
+  }, []);
+
   // ---- boot: restore a persisted session ----
   useEffect(() => {
     (async () => {
