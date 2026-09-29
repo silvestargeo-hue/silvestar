@@ -10,6 +10,7 @@ import { RoomsView } from "@/components/RoomsView";
 import { GraphView } from "@/components/GraphView";
 import { LibraryView } from "@/components/LibraryView";
 import { SettingsView } from "@/components/SettingsView";
+import { GuideView } from "@/components/GuideView";
 import { LockScreen } from "@/components/LockScreen";
 import { UserPanel } from "@/components/UserPanel";
 import { AdminPanel } from "@/components/AdminPanel";
@@ -21,7 +22,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useOnline, useTheme, toast } from "@/lib/kit";
 import "./lock.css";
 
-type Tab = "panel" | "ask" | "library" | "archive" | "vault" | "rooms" | "graph" | "settings" | "admin";
+type Tab = "panel" | "ask" | "library" | "archive" | "vault" | "rooms" | "graph" | "settings" | "guide" | "admin";
 
 const TABS: NavTab[] = [
   { id: "panel", label: "Home", icon: "🏠", group: "Workspace" },
@@ -32,6 +33,7 @@ const TABS: NavTab[] = [
   { id: "graph", label: "Graph", icon: "🕸", group: "Knowledge" },
   { id: "rooms", label: "Rooms", icon: "🎙", group: "System" },
   { id: "settings", label: "Settings", icon: "⚙️", group: "System" },
+  { id: "guide", label: "Guide", icon: "📖", group: "System" },
   { id: "admin", label: "Admin", icon: "🛡", admin: true, group: "System" },
 ];
 
@@ -238,6 +240,7 @@ export default function Home() {
             />
           </ErrorBoundary>
         )}
+        {tab === "guide" && <ErrorBoundary><GuideView onNavigate={(id) => setTab(id as Tab)} /></ErrorBoundary>}
         {tab === "admin" && isAdmin && <ErrorBoundary><AdminPanel /></ErrorBoundary>}
       </Shell>
 
