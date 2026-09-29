@@ -1,0 +1,48 @@
+name: Weekly backup
+
+on:
+  schedule:
+    - cron: "0 3 * * 1" # Mondays 03:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mirror data repo → backup repo
+        env:
+          TOKEN: ${{ secrets.BACKUP_TOKEN }}
+        run: |
+          set -e
+          git clone --mirror "https://x-access-token:${TOKEN}@github.com/silvestargeo-hue/silvestar-data.git" data.git
+          git -C data.git remote set-url --push origin "https://x-access-token:${TOKEN}@github.com/silvestargeo-hue/silvestar-data-backup.git"
+          git -C data.git push --mirror
+
+      - name: Snapshot admin export (archive + graph JSON)
+        env:
+          TOKEN: ${{ secrets.BACKUP_TOKEN }}
+          ADMIN_KEY: ${{ secrets.ADMIN_KEY }}
+        run: |
+          set -e
+          STAMP=$(date -u +%Y%m%d-%H%M%S)
+          curl -s --max-time 60 "https://silvestar-api.vercel.app/api/v1/admin/backup" \
+            -H "x-admin-key: ${ADMIN_KEY}" -o "export-${STAMP}.json"
+          REPO="https://x-access-token:${TOKEN}@github.com/silvestargeo-hue/silvestar-data-backup.git"
+          git clone --depth 1 "$REPO" bk 2>/dev/null || git init bk
+          cd bk
+          git config user.email "backup@silvestar.local"
+          git config user.name "silvestar-backup"
+          git remote add origin "$REPO" 2>/dev/null || true
+          mkdir -p exports
+          cp "../export-${STAMP}.json" exports/
+          # keep only the 8 most recent exports
+          ls -t exports/export-*.json 2>/dev/null | tail -n +9 | xargs -r rm --
+          git add exports
+          git commit -m "backup export ${STAMP}" || echo "nothing new"
+          git push origin HEAD:main --force
+
+      - name: Verify
+        run: echo "✅ backup completed $(date -u)"
