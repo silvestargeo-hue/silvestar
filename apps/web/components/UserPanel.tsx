@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { StatTile } from "./Stat";
 import { toast } from "@/lib/kit";
+import { useI18n } from "@/lib/i18n";
 
 type Stats = {
   user_id: string; vault_unlocked: boolean; vault_documents: number;
@@ -23,12 +24,12 @@ function fmtBytes(n: number): string {
   return `${(n / 1048576).toFixed(1)} MB`;
 }
 
-function greeting(): string {
+function greetingKey(): string {
   const h = new Date().getHours();
-  if (h < 5) return "Working late";
-  if (h < 12) return "Good morning";
-  if (h < 18) return "Good afternoon";
-  return "Good evening";
+  if (h < 5) return "workingLate";
+  if (h < 12) return "goodMorning";
+  if (h < 18) return "goodAfternoon";
+  return "goodEvening";
 }
 
 export function UserPanel({ userId, authToken, sessionToken, userName, onNavigate }: {
@@ -36,6 +37,7 @@ export function UserPanel({ userId, authToken, sessionToken, userName, onNavigat
 }) {
   const [stats, setStats] = useState<Stats | null>(null);
   const [fstats, setFstats] = useState<FileStats | null>(null);
+  const { t } = useI18n();
 
   const load = useCallback(async () => {
     try { setStats(await api.meStats(userId, sessionToken)); } catch { setStats(null); }
@@ -59,7 +61,7 @@ export function UserPanel({ userId, authToken, sessionToken, userName, onNavigat
     <div>
       <div className="home-hero">
         <div className="home-hero-text">
-          <h1>{greeting()}{userName ? `, ${userName}` : ""} 👋</h1>
+          <h1>{t(greetingKey())}{userName ? `, ${userName}` : ""} 👋</h1>
           <p>Your files, documents and AI — all in one place. What would you like to do?</p>
         </div>
         <div className="home-hero-actions">
@@ -82,7 +84,7 @@ export function UserPanel({ userId, authToken, sessionToken, userName, onNavigat
 
       <div className="grid2">
         <div className="card">
-          <h2>⚡ Quick actions</h2>
+          <h2>⚡ {t("quickActions")}</h2>
           <div className="qa-grid">
             <button className="qa" onClick={() => onNavigate("ask")}>
               <span className="qa-ic">🤖</span><span className="qa-t">Ask AI</span>
@@ -112,7 +114,7 @@ export function UserPanel({ userId, authToken, sessionToken, userName, onNavigat
         </div>
 
         <div className="card">
-          <h2>🕒 Recent in Archive</h2>
+          <h2>🕒 {t("recentArchive")}</h2>
           {stats?.recent_archive.length ? (
             stats.recent_archive.map((d) => (
               <div key={d.id} className="hit">

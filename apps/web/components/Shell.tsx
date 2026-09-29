@@ -5,6 +5,7 @@
 import { useEffect, useState } from "react";
 import { useTheme } from "@/lib/kit";
 import { api } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 
 export type NavTab = { id: string; label: string; icon: string; admin?: boolean; group?: string };
 
@@ -50,6 +51,8 @@ export function Shell({ tabs, active, onNavigate, headerExtra, footer, children 
   const { theme, toggle } = useTheme();
   const [mobileOpen, setMobileOpen] = useState(false);
   const health = useSysHealth();
+  const i18n = useI18n();
+  const i18nT = (id: string, fallback: string) => i18n.t(id) === id ? fallback : i18n.t(id);
 
   // close drawer on navigation (mobile)
   useEffect(() => { setMobileOpen(false); }, [active]);
@@ -78,7 +81,7 @@ export function Shell({ tabs, active, onNavigate, headerExtra, footer, children 
         <nav className="side-nav">
           {groups.map((g) => (
             <div key={g.label} className="side-group">
-              <div className="side-group-label">{g.label}</div>
+              <div className="side-group-label">{i18nT(g.label.toLowerCase(), g.label)}</div>
               {g.items.map((t) => (
                 <button
                   key={t.id}
@@ -87,7 +90,7 @@ export function Shell({ tabs, active, onNavigate, headerExtra, footer, children 
                   aria-current={active === t.id ? "page" : undefined}
                 >
                   <span className="si">{t.icon}</span>
-                  <span>{t.label}</span>
+                  <span>{i18nT(t.id, t.label)}</span>
                 </button>
               ))}
             </div>
@@ -126,7 +129,7 @@ export function Shell({ tabs, active, onNavigate, headerExtra, footer, children 
       <div className="shell-main">
         <header className="mhead">
           <button className="burger" onClick={() => setMobileOpen(true)} aria-label="Open menu">☰</button>
-          <span className="mtitle">{activeTab ? `${activeTab.icon} ${activeTab.label}` : "Silvestar"}</span>
+          <span className="mtitle">{activeTab ? `${activeTab.icon} ${i18nT(activeTab.id, activeTab.label)}` : "Silvestar"}</span>
           <span className={`sys-pill ${health.ok ? "" : "bad"}`} title={`System ${health.ok ? "healthy" : "degraded"} · AI ${health.ai}`}>
             <span className="sys-dot" /> {health.ok ? "System OK" : "Degraded"}
           </span>
@@ -137,7 +140,7 @@ export function Shell({ tabs, active, onNavigate, headerExtra, footer, children 
         <header className="dhead">
           <div className="dhead-title">
             <span className="dhead-icon">{activeTab?.icon ?? "⭐"}</span>
-            <span>{activeTab?.label ?? "Silvestar"}</span>
+            <span>{activeTab ? i18nT(activeTab.id, activeTab.label) : "Silvestar"}</span>
           </div>
           <div className="dhead-status">
             <span className={`sys-pill ${health.ok ? "" : "bad"}`} title="API + database reachability">

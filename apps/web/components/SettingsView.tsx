@@ -5,6 +5,7 @@
 import { useEffect, useState } from "react";
 import { api, type AuthUser } from "@/lib/api";
 import { toast, Modal, useOnline, useTheme } from "@/lib/kit";
+import { LANGS, useI18n, setLang, type Lang } from "@/lib/i18n";
 
 const ACCENTS: { name: string; color: string }[] = [
   { name: "Violet", color: "#7c5cff" },
@@ -43,6 +44,7 @@ export function SettingsView({ user, authToken, onUserUpdate, lockOn, onToggleLo
 }) {
   const { theme, toggle: toggleTheme } = useTheme();
   const { accent, apply: applyAccent } = useAccent();
+  const { t, lang } = useI18n();
   const online = useOnline();
   const [health, setHealth] = useState<Health | null>(null);
   const [dialog, setDialog] = useState<null | { kind: "name" } | { kind: "pass" }>(null);
@@ -85,15 +87,24 @@ export function SettingsView({ user, authToken, onUserUpdate, lockOn, onToggleLo
     <div className="settings">
       {/* ------------------------------------------------------ appearance */}
       <div className="card">
-        <h2>🎨 Appearance</h2>
+        <h2>🎨 {t("appearance")}</h2>
         <div className="set-row">
           <div>
-            <div className="set-t">Theme</div>
+            <div className="set-t">{t("theme")}</div>
             <div className="set-d">Dark for night owls, light for daylight.</div>
           </div>
           <button className="btn ghost" onClick={toggleTheme}>
             {theme === "dark" ? "☀️ Light" : "🌙 Dark"}
           </button>
+        </div>
+        <div className="set-row">
+          <div>
+            <div className="set-t">{t("langLabel")}</div>
+            <div className="set-d">English · हिन्दी · नेपाली</div>
+          </div>
+          <select className="input" value={lang} onChange={(e) => setLang(e.target.value as Lang)} style={{ width: 140 }}>
+            {LANGS.map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}
+          </select>
         </div>
         <div className="set-row">
           <div>
