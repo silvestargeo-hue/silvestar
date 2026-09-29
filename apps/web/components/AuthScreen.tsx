@@ -10,10 +10,11 @@ import { passwordStrength } from "@/lib/kit";
 
 type Mode = "signin" | "signup" | "forgot" | "otp" | "verify";
 
-export function AuthScreen({ onAuthed }: {
+export function AuthScreen({ onAuthed, initialMode }: {
   onAuthed: (sessionToken: string, user: AuthUser) => void;
+  initialMode?: Mode;
 }) {
-  const [mode, setMode] = useState<Mode>("signin");
+  const [mode, setMode] = useState<Mode>(initialMode ?? "signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");

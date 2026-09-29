@@ -12,6 +12,7 @@ import { LibraryView } from "@/components/LibraryView";
 import { SettingsView } from "@/components/SettingsView";
 import { GuideView } from "@/components/GuideView";
 import { LockScreen } from "@/components/LockScreen";
+import { Landing } from "@/components/Landing";
 import { UserPanel } from "@/components/UserPanel";
 import { AdminPanel } from "@/components/AdminPanel";
 import { Shell, type NavTab } from "@/components/Shell";
@@ -61,6 +62,8 @@ export default function Home() {
   const [lockOn, setLockOn] = useState(false); // setting: lock on start
   const [vaultSession, setVaultSession] = useState<string>(""); // vault unlock (separate from login)
   const [adminFlag, setAdminFlag] = useState(false); // legacy admin-key login
+  const [showLanding, setShowLanding] = useState(true); // landing before sign-in
+  const [landingSignup, setLandingSignup] = useState(false); // CTA target mode
   const { theme, toggle: toggleTheme } = useTheme();
   const online = useOnline();
   const { count: notifCount, refresh: refreshNotifs } = useNotificationCount(user?.user_id || "anon");
@@ -113,6 +116,8 @@ export default function Home() {
     setVaultSession("");
     setLocked(false);
     setTab("panel");
+    setShowLanding(true);
+    setLandingSignup(false);
   };
 
   const isAdmin = user?.role === "admin" || adminFlag;
@@ -146,7 +151,16 @@ export default function Home() {
 
   // ---- auth gate ----
   if (!booted) return <div className="app"><div className="skel" style={{ height: "60vh" }} /></div>;
-  if (!user) return <AuthScreen onAuthed={persist} />;
+  if (!user) {
+    return showLanding ? (
+      <Landing
+        onEnter={() => { setLandingSignup(false); setShowLanding(false); }}
+        onSignup={() => { setLandingSignup(true); setShowLanding(false); }}
+      />
+    ) : (
+      <AuthScreen onAuthed={persist} initialMode={landingSignup ? "signup" : "signin"} />
+    );
+  }
 
   // ---- optional lock screen gate ----
   if (locked) {

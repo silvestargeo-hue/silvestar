@@ -434,3 +434,43 @@ footer.pf { margin-top: 30px; color: var(--muted); font-size: 12px; text-align: 
   .home-hero { padding: 18px; }
   .qa-grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
 }
+
+/* ==================== public landing page ==================== */
+.landing { min-height: 100vh; position: relative; overflow-x: hidden; }
+.landing-stars { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; opacity: .5; pointer-events: none; }
+.land-nav {
+  position: relative; z-index: 2; display: flex; align-items: center; justify-content: space-between;
+  padding: 18px 28px; max-width: 1080px; margin: 0 auto;
+}
+.land-logo { font-weight: 800; font-size: 18px; letter-spacing: -.01em; }
+.land-hero {
+  position: relative; z-index: 2; text-align: center; padding: 60px 20px 30px; max-width: 780px; margin: 0 auto;
+}
+.land-hero h1 { font-size: clamp(30px, 6vw, 54px); line-height: 1.12; margin: 0 0 16px; letter-spacing: -.03em; }
+.land-grad {
+  background: linear-gradient(90deg, var(--accent), var(--accent2));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.land-hero p { color: var(--muted); font-size: 16.5px; line-height: 1.6; margin: 0 auto 26px; max-width: 620px; }
+.land-cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+.btn.big { padding: 13px 26px; font-size: 15.5px; border-radius: 12px; }
+.land-badges {
+  display: flex; gap: 16px; justify-content: center; flex-wrap: wrap;
+  margin-top: 22px; color: var(--muted); font-size: 12.5px;
+}
+.land-grid {
+  position: relative; z-index: 2; display: grid; gap: 14px; max-width: 1080px; margin: 34px auto 0;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); padding: 0 20px 20px;
+}
+.land-card {
+  border: 1px solid var(--border); background: var(--panel); border-radius: 16px; padding: 20px 22px;
+  transition: transform .15s ease, border-color .15s ease;
+}
+.land-card:hover { transform: translateY(-3px); border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
+.land-ic { font-size: 26px; margin-bottom: 8px; }
+.land-card h3 { margin: 0 0 6px; font-size: 16px; }
+.land-card p { margin: 0; color: var(--muted); font-size: 13.5px; line-height: 1.55; }
+.land-foot {
+  position: relative; z-index: 2; display: flex; flex-direction: column; gap: 8px; align-items: center;
+  padding: 30px 20px 40px; color: var(--muted); font-size: 13px; text-align: center;
+}
