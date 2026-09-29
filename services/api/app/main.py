@@ -390,6 +390,40 @@ async def admin_overview(request: Request):
     }
 
 
+@app.get("/api/v1/admin/usage", tags=["admin"])
+async def admin_usage(request: Request):
+    """Usage dashboard data: users, files, storage bytes, AI/audit activity."""
+    await _require_admin(request)
+    rows, _total = await db.list(ACCOUNTS_LIB, limit=500)
+    users = []
+    docs = await asyncio.gather(*[db.fetch(r["id"]) for r in rows])
+    for doc, r in zip(docs, rows):
+        m = (doc or r).get("meta", {})
+        users.append({"user_id": m.get("user_id", ""), "role": m.get("role", "user"),
+                      "status": m.get("status", "active"), "email": m.get("email", r.get("id", "").split("::", 1)[-1])})
+    total_files = 0
+    total_bytes = 0
+    for u in users:
+        try:
+            st = await file_store.stats(u.get("user_id") or "")
+            total_files += st.get("files", 0)
+            total_bytes += st.get("bytes", 0)
+        except Exception:
+            continue
+    audit_rows, _n = await db.list("audit-log", limit=200)
+    ai_calls = sum(1 for r in audit_rows if str(r.get("id", "")).startswith("a-"))
+    recent = [{"id": r.get("id"), "action": r.get("title", ""), "detail": r.get("snippet", "")[:120]}
+              for r in audit_rows[:10]]
+    def _mb(n: int) -> str:
+        return f"{n / 1048576:.1f} MB" if n >= 1048576 else f"{n / 1024:.1f} KB"
+    return {
+        "users": {"total": len(users), "admins": sum(1 for u in users if u.get("role") == "admin"),
+                  "active": sum(1 for u in users if u.get("status") == "active")},
+        "files": {"total": total_files, "bytes": total_bytes, "human": _mb(total_bytes)},
+        "activity": {"recent_audit_entries": len(audit_rows), "recent_events": recent},
+    }
+
+
 @app.post("/api/v1/admin/documents", tags=["admin"])
 async def admin_add_document(request: Request, body: AdminDocIn):
     await _require_admin(request)

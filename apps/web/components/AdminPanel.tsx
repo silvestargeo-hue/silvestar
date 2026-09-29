@@ -18,6 +18,15 @@ type Overview = {
   uptime_s: number;
 };
 
+function adminH(): Record<string, string> {
+  const h: Record<string, string> = {};
+  if (typeof window !== "undefined") {
+    const k = localStorage.getItem("sv-admin-key");
+    if (k) h["x-admin-key"] = k;
+  }
+  return h;
+}
+
 const MODEL_PRESETS = [
   "nex-agi/nex-n2.5-mini:free",
   "nvidia/nemotron-3.5-lightning:free",
@@ -35,6 +44,7 @@ export function AdminPanel() {
   const [showAudit, setShowAudit] = useState(false);
   const [metrics, setMetrics] = useState<Record<string, any> | null>(null);
   const [users, setUsers] = useState<AuthUser[]>([]);
+  const [usage, setUsage] = useState<Record<string, any> | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -42,6 +52,7 @@ export function AdminPanel() {
       setErr("");
       api.metrics().then(setMetrics).catch(() => {});
       api.adminUsers().then((r) => setUsers(r.users)).catch(() => {});
+      fetch("/api/v1/admin/usage", { headers: adminH() }).then((r) => r.json()).then(setUsage).catch(() => {});
     } catch (e: any) {
       setErr(String(e.message || e));
       setOv(null);
@@ -218,6 +229,31 @@ export function AdminPanel() {
         </table>
         {users.length === 0 && <div className="hint">No registered users yet.</div>}
       </div>
+
+      {usage && (
+        <div className="card">
+          <h2>📊 Usage</h2>
+          <div className="tile-grid">
+            <StatTile icon="👥" label="Users" value={usage.users?.total ?? "—"}
+              sub={`${usage.users?.admins ?? 0} admin · ${usage.users?.active ?? 0} active`} />
+            <StatTile icon="🗂" label="Files stored" value={usage.files?.total ?? "—"}
+              sub={usage.files?.human ?? ""} accent="var(--accent2)" />
+            <StatTile icon="📋" label="Audit events" value={usage.activity?.recent_audit_entries ?? "—"}
+              sub="recent window" accent="var(--ok)" />
+          </div>
+          {(usage.activity?.recent_events || []).length > 0 && (
+            <>
+              <h2 style={{ marginTop: 14 }}>🕒 Recent activity</h2>
+              {usage.activity.recent_events.slice(0, 6).map((ev: any, i: number) => (
+                <div key={ev.id || i} className="hit">
+                  <div className="t">{ev.action}</div>
+                  <div className="s">{ev.detail}</div>
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      )}
 
       <div className="card">
         <h2>📄 Publish to Archive (admin)</h2>

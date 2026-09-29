@@ -121,9 +121,32 @@ class FileStore:
         import json as _j
         await cache.set(f"files-idx:{key}", _j.dumps(val), ttl=None)
 
+    # ------------------------------------------------------- versions ------
+    async def list_versions(self, user_id: str, path: str) -> dict:
+        idx = await self._user_index(user_id)
+        meta = idx["files"].get(path)
+        if not meta:
+            raise FileNotFoundError("file not found")
+        return {"path": path, "versions": meta.get("versions") or []}
+
+    async def restore_version(self, user_id: str, path: str, ts: int) -> dict:
+        idx = await self._user_index(user_id)
+        meta = idx["files"].get(path)
+        if not meta:
+            raise FileNotFoundError("file not found")
+        ver = next((v for v in (meta.get("versions") or []) if int(v.get("ts", 0)) == int(ts)), None)
+        if not ver:
+            raise FileNotFoundError("version not found")
+        data = await self._get_bytes(ver["vpath"])
+        if data is None:
+            raise FileNotFoundError("version bytes missing")
+        name = path.rsplit("/", 1)[-1]
+        # re-upload: current bytes get stashed as a new version automatically
+        return await self.upload(user_id, name, data, folder=meta.get("folder", ""))
+
     # --------------------------------------------------------- share links --
-    async def create_share(self, user_id: str, path: str) -> dict:
-        """Create a revocable public share token for a file (KV + per-user index)."""
+    async def create_share(self, user_id: str, path: str, password: str = "") -> dict:
+        """Create a revocable (optionally password-protected) public share token."""
         import secrets as _s
         idx = await self._user_index(user_id)
         if path not in idx["files"]:
@@ -132,9 +155,11 @@ class FileStore:
         tok = "sh" + _s.token_urlsafe(18)
         rec = {"path": path, "user_id": user_id, "mime": meta.get("mime", ""),
                "name": path.rsplit("/", 1)[-1], "created": int(time.time())}
+        if password:
+            rec["ph"] = hashlib.sha256((settings.secret_key + password).encode()).hexdigest()
         await self._kv_set("share:" + tok, rec)
         await self._remember_share(user_id, tok, rec)
-        return {"token": tok, "path": path, "name": rec["name"]}
+        return {"token": tok, "path": path, "name": rec["name"], "protected": bool(password)}
 
     async def revoke_share(self, user_id: str, token: str) -> dict:
         rec = await self._kv_get("share:" + token)
@@ -185,11 +210,14 @@ class FileStore:
             except Exception:
                 pass
 
-    async def resolve_share(self, token: str) -> Optional[tuple[bytes, str, str]]:
-        """Return (bytes, mime, name) for a valid share token, else None."""
+    async def resolve_share(self, token: str, password: str = "") -> Optional[tuple[bytes, str, str]]:
+        """Return (bytes, mime, name) for a valid share token + password, else None."""
         rec = await self._kv_get("share:" + token)
         if not rec or not rec.get("path"):
             return None
+        if rec.get("ph"):
+            if hashlib.sha256((settings.secret_key + password).encode()).hexdigest() != rec["ph"]:
+                return None
         data = await self._get_bytes(rec["path"])
         if data is None:
             return None
@@ -233,10 +261,34 @@ class FileStore:
         gh = await self._put_bytes(path, data, f"silvestar: upload {user_id}/{folder_clean}/{fname}")
         mime = mimetypes.guess_type(fname)[0] or "application/octet-stream"
 
+        idx = await self._user_index(user_id)
+
+        # version history: stash the previous bytes (keep last 3) on overwrite
+        versions: list[dict] = []
+        old_meta = idx["files"].get(path)
+        if old_meta:
+            try:
+                old = await self._get_bytes(path)
+                if old is not None:
+                    old_ts = int(old_meta.get("uploaded", time.time()))
+                    vdir = hashlib.sha1(path.encode()).hexdigest()[:12]
+                    vpath = f"versions/{_safe_segment(user_id)}/{vdir}/{old_ts}-{fname}"
+                    await self._put_bytes(vpath, old, f"silvestar: version snapshot {path}@{old_ts}")
+                    versions = list(old_meta.get("versions") or [])
+                    versions.insert(0, {"ts": old_ts, "size": old_meta.get("size", 0), "vpath": vpath})
+                    # prune beyond 3
+                    for gone in versions[3:]:
+                        try:
+                            await self._delete_path(gone.get("vpath", ""))
+                        except Exception:
+                            pass
+                    versions = versions[:3]
+            except Exception:
+                versions = list(old_meta.get("versions") or [])
+
         # extract text for RAG (pdf/docx/txt/md/csv)
         text = await asyncio.to_thread(_extract_text, fname, mime, data)
 
-        idx = await self._user_index(user_id)
         meta = {
             "path": path,
             "folder": folder_clean,
@@ -246,6 +298,7 @@ class FileStore:
             "note": note[:500],
             "uploaded": int(time.time()),
             "indexed": bool(text),
+            "versions": versions,
         }
         idx["files"][path] = meta
         if folder_clean and folder_clean not in idx["folders"]:

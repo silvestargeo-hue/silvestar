@@ -126,8 +126,18 @@ class FolderIn(BaseModel):
     folder: str
 
 
+class ShareIn(BaseModel):
+    path: str
+    password: str = ""
+
+
 class ShareRevokeIn(BaseModel):
     token: str
+
+
+class RestoreIn(BaseModel):
+    path: str
+    ts: int
 
 
 @router.post("/rename")
@@ -158,6 +168,74 @@ async def create_folder(request: Request, body: FolderIn):
 async def delete_file(request: Request, body: DeleteIn):
     uid = await _uid_async(request)
     return await files.delete_file(uid, body.path)
+
+
+# --------------------------------------------------------------- versions --
+@router.get("/versions")
+async def versions(request: Request, path: str = Query(...)):
+    uid = await _uid_async(request)
+    try:
+        return await files.list_versions(uid, path)
+    except FileNotFoundError:
+        raise HTTPException(404, "file not found")
+
+
+@router.post("/versions/restore")
+async def restore_version(request: Request, body: RestoreIn):
+    uid = await _uid_async(request)
+    try:
+        return await files.restore_version(uid, body.path, body.ts)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+
+
+# ------------------------------------------------------------ share links --
+@router.post("/share")
+async def share_file(request: Request, body: ShareIn):
+    """body.path = file path, optional body.password → public share link."""
+    uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in to share files")
+    try:
+        r = await files.create_share(uid, body.path, body.password or "")
+    except FileNotFoundError:
+        raise HTTPException(404, "file not found")
+    base = str(request.base_url).rstrip("/")
+    return {**r, "url": f"{base}/api/v1/files/public/{r['token']}"}
+
+
+@router.get("/shares")
+async def shares(request: Request):
+    uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in to manage shares")
+    return await files.list_shares(uid)
+
+
+@router.post("/share/revoke")
+async def revoke_share(request: Request, body: ShareRevokeIn):
+    uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in to manage shares")
+    try:
+        return await files.revoke_share(uid, body.token)
+    except FileNotFoundError:
+        raise HTTPException(404, "share not found")
+
+
+@router.get("/public/{token}")
+async def public_download(request: Request, token: str, password: str = Query("")):
+    """No-auth public access for a valid, unrevoked share token (+ password if set)."""
+    got = await files.resolve_share(token, password)
+    if not got:
+        raise HTTPException(404, "link expired, revoked, or wrong password")
+    data, mime, name = got
+    safe = urllib.parse.quote(name)
+    return Response(
+        content=data,
+        media_type=mime,
+        headers={"Content-Disposition": f"inline; filename*=UTF-8''{safe}"},
+    )
 
 
 # ------------------------------------------------------------ share links --

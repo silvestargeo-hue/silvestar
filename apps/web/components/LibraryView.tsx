@@ -56,6 +56,10 @@ export function LibraryView({ userId, sessionToken }: { userId: string; sessionT
   const [moveTarget, setMoveTarget] = useState<FileMeta | null>(null);
   const [moveVal, setMoveVal] = useState("");
   const [shareUrl, setShareUrl] = useState("");
+  const [shareTarget, setShareTarget] = useState<FileMeta | null>(null);
+  const [sharePass, setSharePass] = useState("");
+  const [verTarget, setVerTarget] = useState<FileMeta | null>(null);
+  const [verList, setVerList] = useState<{ ts: number; size: number; vpath: string }[]>([]);
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [newFolderVal, setNewFolderVal] = useState("");
   const [dragOver, setDragOver] = useState(false);
@@ -184,17 +188,53 @@ export function LibraryView({ userId, sessionToken }: { userId: string; sessionT
     } catch { toast("Move failed", "err"); } finally { setBusy(false); }
   };
 
-  const doShare = async (f: FileMeta) => {
+  const doShare = async (f: FileMeta, password = "") => {
     setBusy(true);
     try {
       const r = await fetch(`${API}/api/v1/files/share`, {
         method: "POST",
         headers: { ...authHeaders(sessionToken, userId), "Content-Type": "application/json" },
-        body: JSON.stringify({ path: f.path }),
+        body: JSON.stringify({ path: f.path, password }),
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.detail || "share failed");
+      setShareTarget(null);
+      setSharePass("");
       setShareUrl(j.url);
+    } catch (e) {
+      toast(String(e instanceof Error ? e.message : e).replace(/^\d+:\s*/, ""), "err");
+    } finally { setBusy(false); }
+  };
+
+  const openVersions = async (f: FileMeta) => {
+    setBusy(true);
+    try {
+      const r = await fetch(`${API}/api/v1/files/versions?path=${encodeURIComponent(f.path)}`,
+        { headers: authHeaders(sessionToken, userId) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.detail || "failed");
+      setVerList(j.versions || []);
+      setVerTarget(f);
+    } catch (e) {
+      toast(String(e instanceof Error ? e.message : e).replace(/^\d+:\s*/, ""), "err");
+    } finally { setBusy(false); }
+  };
+
+  const doRestore = async (ts: number) => {
+    if (!verTarget) return;
+    if (!confirm("Restore this version? The current file is saved as a new version first.")) return;
+    setBusy(true);
+    try {
+      const r = await fetch(`${API}/api/v1/files/versions/restore`, {
+        method: "POST",
+        headers: { ...authHeaders(sessionToken, userId), "Content-Type": "application/json" },
+        body: JSON.stringify({ path: verTarget.path, ts }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.detail || "restore failed");
+      toast("Version restored ✓", "ok");
+      setVerTarget(null);
+      load();
     } catch (e) {
       toast(String(e instanceof Error ? e.message : e).replace(/^\d+:\s*/, ""), "err");
     } finally { setBusy(false); }
@@ -308,7 +348,8 @@ export function LibraryView({ userId, sessionToken }: { userId: string; sessionT
                 <button className="btn tiny" onClick={() => dl(f)} title="Download">⬇</button>
               <button className="btn tiny" onClick={() => { setRenameTarget(f); setRenameVal(f.name); }} title="Rename">✏</button>
               <button className="btn tiny" onClick={() => { setMoveTarget(f); setMoveVal(f.folder); }} title="Move to folder">➡</button>
-              <button className="btn tiny" onClick={() => doShare(f)} title="Public share link">🔗</button>
+              <button className="btn tiny" onClick={() => setShareTarget(f)} title="Public share link">🔗</button>
+              <button className="btn tiny" onClick={() => openVersions(f)} title="Version history">🕓</button>
               <button className="btn tiny danger" onClick={() => doDelete(f)} title="Delete">🗑</button>
               </div>
             </div>
@@ -328,7 +369,8 @@ export function LibraryView({ userId, sessionToken }: { userId: string; sessionT
                   <button className="btn tiny" onClick={() => dl(f)}>⬇</button>
                   <button className="btn tiny" onClick={() => { setRenameTarget(f); setRenameVal(f.name); }}>✏</button>
                 <button className="btn tiny" onClick={() => { setMoveTarget(f); setMoveVal(f.folder); }}>➡</button>
-                <button className="btn tiny" onClick={() => doShare(f)} title="Public share link">🔗</button>
+                <button className="btn tiny" onClick={() => setShareTarget(f)} title="Public share link">🔗</button>
+                <button className="btn tiny" onClick={() => openVersions(f)} title="Version history">🕓</button>
                 <button className="btn tiny danger" onClick={() => doDelete(f)}>🗑</button>
                 </td>
               </tr>
@@ -357,11 +399,28 @@ export function LibraryView({ userId, sessionToken }: { userId: string; sessionT
         </Modal>
       )}
 
+      {/* share options modal */}
+      {shareTarget && (
+        <Modal title={`🔗 Share "${shareTarget.name}"`} onClose={() => { setShareTarget(null); setSharePass(""); }}>
+          <div className="muted small" style={{ marginBottom: 8 }}>
+            Anyone with the link can view this file. Add a password to require it before opening.
+          </div>
+          <input className="input" type="text" placeholder="Password (optional)" value={sharePass}
+            onChange={(e) => setSharePass(e.target.value)} autoFocus />
+          <div className="row gap" style={{ marginTop: 12 }}>
+            <button className="btn primary" disabled={busy} onClick={() => doShare(shareTarget, sharePass)}>
+              {sharePass ? "Create protected link" : "Create public link"}
+            </button>
+            <button className="btn ghost" onClick={() => { setShareTarget(null); setSharePass(""); }}>Cancel</button>
+          </div>
+        </Modal>
+      )}
+
       {/* share link modal */}
       {shareUrl && (
         <Modal title="🔗 Public share link" onClose={() => setShareUrl("")}>
           <div className="muted small" style={{ marginBottom: 8 }}>
-            Anyone with this link can view this file. Revoke access by deleting the share in a future update, or contact support.
+            Anyone with this link can view this file.
           </div>
           <input className="input" readOnly value={shareUrl} onFocus={(e) => e.currentTarget.select()} autoFocus />
           <div className="row gap" style={{ marginTop: 12 }}>
@@ -369,6 +428,22 @@ export function LibraryView({ userId, sessionToken }: { userId: string; sessionT
             <button className="btn ghost" onClick={() => { window.open(shareUrl, "_blank", "noopener"); }}>Open</button>
             <button className="btn ghost" onClick={() => setShareUrl("")}>Done</button>
           </div>
+        </Modal>
+      )}
+
+      {/* versions modal */}
+      {verTarget && (
+        <Modal title={`🕓 Versions of "${verTarget.name}"`} onClose={() => setVerTarget(null)}>
+          {verList.length === 0 && <div className="hint">No previous versions yet. Re-upload the same filename to create one (keeps last 3).</div>}
+          {verList.map((v) => (
+            <div key={v.ts} className="hit">
+              <div className="t">📦 {new Date(v.ts * 1000).toLocaleString()} · {fmtSize(v.size)}</div>
+              <div className="row gap" style={{ marginTop: 6 }}>
+                <button className="btn tiny" onClick={() => window.open(`${API}/api/v1/files/download?path=${encodeURIComponent(v.vpath)}`, "_blank", "noopener")}>Download</button>
+                <button className="btn tiny primary" onClick={() => doRestore(v.ts)}>Restore</button>
+              </div>
+            </div>
+          ))}
         </Modal>
       )}
 
