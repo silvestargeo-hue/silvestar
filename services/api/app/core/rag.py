@@ -105,6 +105,7 @@ async def build_context(query: str, user_id: str, vault_session: "VaultSessionIn
 async def build_file_context(query: str, user_id: str, file_path: str) -> tuple[str, list[Retrieved]]:
     """Context built ONLY from one Library file's indexed text (chat-with-one-file)."""
     rel = file_path.split("/", 2)[2] if file_path.count("/") >= 2 else file_path
+    from .files import _fdoc_id  # lazy: avoids circular import at module load
     doc_id = "d-" + _fdoc_id(user_id, file_path)[2:]
     from .db import db
     doc = await db.fetch(doc_id)
