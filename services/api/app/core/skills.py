@@ -49,16 +49,25 @@ async def _user_skills(user_id: str) -> list[dict]:
     # gallery/builtin skills are visible (and auto-applied) to everyone
     global _SKILL_LIB, _SKILL_LIB_CACHE
     if time.time() - _SKILL_LIB_CACHE > 300 or not _SKILL_LIB:
-        docs, _total = await db.list(SKILLS_LIB, limit=100, offset=0)
+        docs, _total = await db.list(SKILLS_LIB, limit=60, offset=0)
         lib = []
         for d in docs:
             try:
-                meta = d.get("meta") if isinstance(d, dict) else {}
-                content = d.get("content", "{}")
-                rec = json.loads(content) if isinstance(content, str) and content.startswith("{") else {"name": d.get("title", ""), "instructions": content}
+                # db.list returns truncated content — fetch the full doc
+                full = await db.fetch(d.get("id", ""))
+                content = (full or {}).get("content") or d.get("snippet") or ""
+                rec = None
+                if isinstance(content, str) and content.startswith("{"):
+                    try:
+                        rec = json.loads(content)
+                    except Exception:
+                        rec = None
+                if not rec:
+                    rec = {"name": d.get("title", ""), "instructions": content}
                 rec["id"] = d.get("id", "")
                 rec["builtin"] = True
-                lib.append(rec)
+                if rec.get("name") and rec.get("instructions"):
+                    lib.append(rec)
             except Exception:
                 continue
         _SKILL_LIB, _SKILL_LIB_CACHE = lib, time.time()
