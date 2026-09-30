@@ -23,6 +23,7 @@ class Retrieved:
     score: float
     fingerprint: str = ""  # set for vault docs (identity w/o plaintext)
     cited: bool = False
+    folder: str = ""       # Library folder (file docs only, from meta)
 
 
 def chunk_text(text: str, chunk_chars: int = 700, overlap: int = 80) -> list[str]:
@@ -43,15 +44,18 @@ def chunk_text(text: str, chunk_chars: int = 700, overlap: int = 80) -> list[str
 
 
 async def retrieve(query: str, user_id: str, vault_session: "VaultSessionInfo | None" = None,
-                   limit_per_lib: int = 5) -> list[Retrieved]:
+                   limit_per_lib: int = 5, folder: str = "") -> list[Retrieved]:
     """Parallel search of Archive + Vault. Vault snippets decrypt ONLY if the
-    caller presents a valid vault session; otherwise vault hits are identity-only."""
-    archive_hits = await db.search("archive", query, limit=limit_per_lib)
+    caller presents a valid vault session; otherwise vault hits are identity-only.
+    `folder` (non-empty) scopes retrieval to a Library folder: only file docs
+    whose meta.folder == folder (or nested under folder/) are considered."""
+    archive_hits = [] if folder else await db.search("archive", query, limit=limit_per_lib)
 
     vault_hits_enc = await db.search(f"vault:{user_id}", query, limit=limit_per_lib)
     vault_out: list[Retrieved] = []
     for h in vault_hits_enc:
-        fp = str(h.get("meta", {}).get("fingerprint", ""))
+        meta = h.get("meta", {}) or {}
+        fp = str(meta.get("fingerprint", ""))
         if vault_session and vault_session.valid:
             # decrypt-at-rest content is stored plaintext-in-vault-row only for the
             # session holder; rows hold envelopes, so we read via vault service
@@ -60,16 +64,35 @@ async def retrieve(query: str, user_id: str, vault_session: "VaultSessionInfo | 
             snippet = plain[:400] if plain else "[locked]"
         else:
             snippet = "[locked — unlock vault to include]"
-        vault_out.append(Retrieved(h["id"], "vault", h["title"], snippet, h["score"], fingerprint=fp))
+        vault_out.append(Retrieved(h["id"], "vault", h["title"], snippet, h["score"],
+                                   fingerprint=fp, folder=str(meta.get("folder", ""))))
+
+    # uploaded Library files (extracted text was indexed at upload time)
+    file_hits = await db.search(f"files:{user_id}", query, limit=limit_per_lib)
+    file_out = [
+        Retrieved(h["id"], "files", h["title"], (h.get("content") or "")[:400], h["score"],
+                  folder=str((h.get("meta") or {}).get("folder", "")))
+        for h in file_hits
+        if (h.get("meta") or {}).get("kind") == "file" and h.get("content")
+    ]
 
     out = [Retrieved(h["id"], "archive", h["title"], h["content"][:400], h["score"]) for h in archive_hits]
-    out += vault_out
+    if folder:
+        # only Library file docs inside the requested folder subtree
+        f = folder.strip("/")
+        def _in(r: Retrieved) -> bool:
+            rf = r.folder.strip("/")
+            return rf == f or rf.startswith(f + "/")
+        file_out = [r for r in file_out if _in(r)]
+        vault_out = [r for r in vault_out if _in(r)]
+    out += file_out + vault_out
     out.sort(key=lambda r: r.score, reverse=True)
     return out
 
 
-async def build_context(query: str, user_id: str, vault_session: "VaultSessionInfo | None" = None) -> tuple[str, list[Retrieved]]:
-    hits = await retrieve(query, user_id, vault_session)
+async def build_context(query: str, user_id: str, vault_session: "VaultSessionInfo | None" = None,
+                        folder: str = "") -> tuple[str, list[Retrieved]]:
+    hits = await retrieve(query, user_id, vault_session, folder=folder)
     if not hits:
         return "", []
     blocks = []

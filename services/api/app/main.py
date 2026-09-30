@@ -100,6 +100,8 @@ class AskIn(BaseModel):
     user_id: str = "anon"
     vault_session_token: str = ""
     history: list[dict] = []
+    lang: str = ""     # reply language: en | hi | ne (empty = auto/English)
+    folder: str = ""   # scope RAG to a Library folder (files:<uid> only)
 
 
 class GraphNodeIn(BaseModel):
@@ -276,7 +278,8 @@ async def rag_query(body: AskIn):
 
 @app.post("/api/v1/ask", tags=["ai"])
 async def ask(body: AskIn):
-    return await ai.chat(body.question, body.user_id, body.vault_session_token, body.history)
+    return await ai.chat(body.question, body.user_id, body.vault_session_token, body.history,
+                         lang=body.lang, folder=body.folder)
 
 
 @app.get("/api/v1/ai/health", tags=["ai"])

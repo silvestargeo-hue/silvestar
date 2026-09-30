@@ -169,15 +169,24 @@ class SilvestarAI:
         return {"summary": answer, "engine": engine}
 
     async def chat(self, question: str, user_id: str = "anon", vault_session_token: str = "",
-                   history: list[dict] | None = None) -> dict:
+                   history: list[dict] | None = None, lang: str = "", folder: str = "") -> dict:
         t0 = time.time()
         session = None
         if vault_session_token:
             from .vault import vault as vault_svc
             session = await vault_svc.validate(user_id, vault_session_token)
 
-        context, cited = await build_context(question, user_id, session)
-        messages = [{"role": "system", "content": system_prompt(context, cited)}]
+        context, cited = await build_context(question, user_id, session, folder=folder)
+        sys = system_prompt(context, cited)
+        if lang and lang != "en":
+            _names = {
+                "hi": "Hindi (हिन्दी, Devanagari script)",
+                "ne": "Nepali (नेपाली, Devanagari script)",
+            }
+            lname = _names.get(lang, lang)
+            sys += (f"\n\nIMPORTANT: Reply ONLY in {lname}, regardless of the language of the "
+                    f"question or the context. Keep inline citations like [1] unchanged.")
+        messages = [{"role": "system", "content": sys}]
         for m in (history or [])[-8:]:
             messages.append({"role": m.get("role", "user"), "content": str(m.get("content", ""))[:4000]})
         messages.append({"role": "user", "content": question})

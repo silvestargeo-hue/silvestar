@@ -231,7 +231,7 @@ export default function Home() {
         )}
         {tab === "ask" && (
           <ErrorBoundary>
-            <AskView userId={user.user_id} sessionToken={vaultSession} />
+            <AskView userId={user.user_id} sessionToken={vaultSession} authToken={authToken} />
           </ErrorBoundary>
         )}
         {tab === "library" && (
