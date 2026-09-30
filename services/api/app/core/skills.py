@@ -142,26 +142,33 @@ async def list_skills(user_id: str) -> dict:
 
 
 # --------------------------------------------------------- relevance matching --
+_SKILL_STOP = {
+    "the", "and", "for", "with", "you", "your", "are", "not", "but", "his",
+    "her", "him", "she", "that", "this", "from", "into", "onto", "over",
+    "skill", "plugin", "assistant", "expert", "act", "professional", "master",
+    "generator", "creator", "maker", "helper", "agent", "prompt", "prompts",
+    "system", "user", "new", "old", "top", "best", "free", "like", "a", "an",
+    "in", "on", "of", "to", "as", "at", "by", "or", "is", "it", "be",
+}
+
+
 def relevant_skills(skills: list[dict], question: str) -> list[dict]:
-    """Skills whose name/trigger words appear in the question. Empty triggers
-    or a builtin gallery skill with no match rule still apply if the name is
-    mentioned; otherwise gallery skills with no trigger match are ignored."""
+    """Skills whose meaningful name/trigger words appear in the question.
+    Generic words (the/and/for…) never count; capped at 3 to keep prompts tight.
+    A personal skill with explicitly empty triggers always applies (opt-in)."""
     q = question.lower()
+    q_words = set(re.findall(r"[a-z0-9_-]{3,}", q))
     picked = []
     for s in skills:
-        trig = s.get("triggers") or []
-        name = (s.get("name") or "").lower()
-        words = [w for w in re.findall(r"[a-z0-9_-]{3,}", name) if w not in
-                 ("skill", "plugin", "assistant", "ai")]
-        hit = False
-        for t in trig + words:
-            if t and t in q:
-                hit = True
-                break
-        # a skill with explicitly empty triggers always applies (user opt-in)
-        if hit or (s.get("triggers") is not None and len(trig) == 0 and not s.get("builtin")):
+        trig = [t for t in (s.get("triggers") or []) if t not in _SKILL_STOP]
+        name_words = [w for w in re.findall(r"[a-z0-9_-]{3,}", (s.get("name") or "").lower())
+                      if w not in _SKILL_STOP]
+        hit = any(t in q_words for t in trig) or any(w in q_words for w in name_words)
+        if hit or (not s.get("builtin") and s.get("triggers") is not None and len(s.get("triggers") or []) == 0):
             picked.append(s)
-    return picked[:8]
+        if len(picked) >= 3:
+            break
+    return picked
 
 
 def skills_system_block(skills: list[dict]) -> str:
