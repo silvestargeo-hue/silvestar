@@ -30,6 +30,8 @@ from .core.cache import cache
 from .core.db import db
 from .core.files import files as file_store
 from .core.file_routes import router as files_router, _uid_async
+from .core import skills as skills_svc
+from .core.crew import run_crew
 from .core.graph import graph
 from .core.realtime import Client, hub, livekit
 from .core.vault import VaultError, vault
@@ -104,6 +106,8 @@ class AskIn(BaseModel):
     folder: str = ""   # scope RAG to a Library folder (files:<uid> only)
     file_path: str = ""  # chat with ONE Library file (overrides folder)
     engine: str = ""   # preferred engine: "" auto | groq | pollinations | openrouter
+    use_tools: bool = True   # builtin auto-tools (omniverse, web, math, time)
+    use_skills: bool = True  # auto-apply user + gallery skills
 
 
 class GraphNodeIn(BaseModel):
@@ -283,7 +287,7 @@ async def ask(body: AskIn, request: Request):
     uid = body.user_id or await _uid_async(request)
     return await ai.chat(body.question, uid, body.vault_session_token, body.history,
                          lang=body.lang, folder=body.folder, file_path=body.file_path,
-                         engine=body.engine)
+                         engine=body.engine, use_tools=body.use_tools, use_skills=body.use_skills)
 
 
 @app.post("/api/v1/ask/followups", tags=["ai"])
@@ -330,7 +334,8 @@ async def ask_stream(body: AskIn, request: Request):
     async def gen():
         async for ev in ai.stream_chat(body.question, uid, body.vault_session_token,
                                        body.history, lang=body.lang, folder=body.folder,
-                                       file_path=body.file_path, engine=body.engine):
+                                       file_path=body.file_path, engine=body.engine,
+                                       use_tools=body.use_tools, use_skills=body.use_skills):
             yield f"data: {__import__('json').dumps(ev)}\n\n"
 
     from fastapi.responses import StreamingResponse
@@ -357,6 +362,51 @@ async def files_semantic_search(request: Request, q: str = Query(..., min_length
         if len(out) >= limit:
             break
     return {"query": q, "results": out, "total": len(out)}
+
+
+# ----------------------------------------------------- Module 14: AI Skills --
+@app.get("/api/v1/skills", tags=["skills"])
+async def skills_list(request: Request):
+    uid = await _uid_async(request)
+    return await skills_svc.list_skills(uid)
+
+
+@app.post("/api/v1/skills", tags=["skills"])
+async def skills_add(request: Request, body: dict):
+    uid = await _uid_async(request)
+    name = str(body.get("name") or "").strip()
+    instructions = str(body.get("instructions") or "").strip()
+    if not name or not instructions:
+        raise HTTPException(422, "name and instructions are required")
+    rec = await skills_svc.add_skill(uid, name, instructions,
+                                     body.get("triggers") or [],
+                                     gallery=bool(body.get("gallery")))
+    return rec
+
+
+@app.delete("/api/v1/skills/{skill_id}", tags=["skills"])
+async def skills_delete(skill_id: str, request: Request):
+    uid = await _uid_async(request)
+    return await skills_svc.delete_skill(uid, skill_id)
+
+
+@app.post("/api/v1/skills/auto-install", tags=["skills"])
+async def skills_auto_install(request: Request):
+    """Daily GitHub harvest: install a fresh batch of free AI skills from top repos."""
+    await _uid_async(request)
+    return await skills_svc.auto_install_skills()
+
+
+# ------------------------------------------------------ Module 15: Crew -----
+@app.post("/api/v1/crew/run", tags=["crew"])
+async def crew_run(body: AskIn, request: Request):
+    """Multi-agent cowork: manager plans, researcher gathers (RAG + omniverse
+    tools), writer drafts, reviewer finalizes. Free, on the platform chain."""
+    uid = body.user_id or await _uid_async(request)
+    session = None
+    if body.vault_session_token:
+        session = await vault.validate(uid, body.vault_session_token)
+    return await run_crew(body.question, uid, lang=body.lang, vault_session=session)
 
 
 @app.get("/api/v1/files/folder-summary", tags=["files"])

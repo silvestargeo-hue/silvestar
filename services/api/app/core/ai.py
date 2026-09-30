@@ -19,6 +19,7 @@ import httpx
 
 from ..config import settings
 from .rag import build_context, build_file_context, system_prompt
+from .skills import relevant_skills, run_tools, skills_system_block
 
 
 class SilvestarAI:
@@ -248,23 +249,54 @@ class SilvestarAI:
         return messages
 
     async def _context_for(self, question: str, user_id: str, session,
-                           folder: str = "", file_path: str = ""):
+                           folder: str = "", file_path: str = "", use_tools: bool = True,
+                           use_skills: bool = True):
+        """RAG context + automatic tool outputs (omniverse, web, math, time)
+        + active skills block. Returns (context, cited, skills_block, tools_used)."""
         if file_path:
-            return await build_file_context(question, user_id, file_path)
-        return await build_context(question, user_id, session, folder=folder)
+            ctx, cited = await build_file_context(question, user_id, file_path)
+        else:
+            ctx, cited = await build_context(question, user_id, session, folder=folder)
+        extra, tools_used = "", []
+        if use_tools:
+            try:
+                tool_ctx, tools_used = await run_tools(question)
+                if tool_ctx:
+                    extra = ("\n\n" + tool_ctx)
+            except Exception:
+                tools_used = []
+        else:
+            tools_used = []
+        skills_block, skill_names = "", []
+        if use_skills:
+          try:
+            from .skills import _user_skills
+            all_sk = await _user_skills(user_id)
+            active = relevant_skills(all_sk, question)
+            skills_block = skills_system_block(active)
+            skill_names = [s.get("name", "") for s in active]
+          except Exception:
+            pass
+        if extra:
+            ctx = (ctx + extra) if ctx else extra.strip()
+        return ctx, cited, skills_block, tools_used, skill_names
 
     async def chat(self, question: str, user_id: str = "anon", vault_session_token: str = "",
                    history: list[dict] | None = None, lang: str = "", folder: str = "",
-                   file_path: str = "", engine: str = "") -> dict:
+                   file_path: str = "", engine: str = "", use_tools: bool = True,
+                   use_skills: bool = True) -> dict:
         t0 = time.time()
         session = None
         if vault_session_token:
             from .vault import vault as vault_svc
             session = await vault_svc.validate(user_id, vault_session_token)
 
-        context, cited = await self._context_for(question, user_id, session,
-                                                 folder=folder, file_path=file_path)
+        context, cited, skills_block, tools_used, skill_names = await self._context_for(
+            question, user_id, session, folder=folder, file_path=file_path,
+            use_tools=use_tools, use_skills=use_skills)
         messages = self._build_messages(question, context, cited, history, lang)
+        if skills_block:
+            messages[0]["content"] += skills_block
 
         context_suffix = ("\n\nContext:\n" + context) if context else ""
         # runtime model override (set from the Admin Panel) wins over config
@@ -301,6 +333,8 @@ class SilvestarAI:
         return {
             "answer": answer,
             "engine": engine,
+            "tools_used": tools_used,
+            "skills_applied": skill_names,
             "citations": [{"i": i, "library": c.library, "title": c.title, "score": c.score, "doc_id": c.doc_id}
                           for i, c in enumerate(cited, 1)],
             "vault_unlocked": bool(session and session.valid),
@@ -309,7 +343,8 @@ class SilvestarAI:
 
     async def stream_chat(self, question: str, user_id: str = "anon", vault_session_token: str = "",
                           history: list[dict] | None = None, lang: str = "", folder: str = "",
-                          file_path: str = "", engine: str = ""):
+                          file_path: str = "", engine: str = "", use_tools: bool = True,
+                          use_skills: bool = True):
         """Yield SSE dicts: {'type':'meta'|'delta'|'done'|'error', ...}. Always ends
         with a done event carrying the full answer text and citations."""
         t0 = time.time()
@@ -318,9 +353,12 @@ class SilvestarAI:
             if vault_session_token:
                 from .vault import vault as vault_svc
                 session = await vault_svc.validate(user_id, vault_session_token)
-            context, cited = await self._context_for(question, user_id, session,
-                                                     folder=folder, file_path=file_path)
+            context, cited, skills_block, tools_used, skill_names = await self._context_for(
+                question, user_id, session, folder=folder, file_path=file_path,
+                use_tools=use_tools, use_skills=use_skills)
             messages = self._build_messages(question, context, cited, history, lang)
+            if skills_block:
+                messages[0]["content"] += skills_block
             citations = [{"i": i, "library": c.library, "title": c.title, "score": c.score,
                           "doc_id": c.doc_id} for i, c in enumerate(cited, 1)]
             yield {"type": "meta", "citations": citations,
@@ -379,7 +417,8 @@ class SilvestarAI:
             if not answer:
                 answer = self._local_extractive(question, context)
                 yield {"type": "delta", "text": answer}
-            yield {"type": "done", "answer": answer, "engine": used,
+            yield {"type": "done", "answer": answer, "engine": used, "tools_used": tools_used,
+                   "skills_applied": skill_names,
                    "citations": citations, "latency_ms": int((time.time() - t0) * 1000)}
         except Exception as e:
             yield {"type": "error", "detail": str(e)[:200]}

@@ -9,6 +9,8 @@ import { AskView } from "@/components/AskView";
 import { RoomsView } from "@/components/RoomsView";
 import { GraphView } from "@/components/GraphView";
 import { LibraryView } from "@/components/LibraryView";
+import { SkillsView } from "@/components/SkillsView";
+import { CrewView } from "@/components/CrewView";
 import { SettingsView } from "@/components/SettingsView";
 import { GuideView } from "@/components/GuideView";
 import { LockScreen } from "@/components/LockScreen";
@@ -23,15 +25,17 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useOnline, useTheme, toast } from "@/lib/kit";
 import "./lock.css";
 
-type Tab = "panel" | "ask" | "library" | "archive" | "vault" | "rooms" | "graph" | "settings" | "guide" | "admin";
+type Tab = "panel" | "ask" | "library" | "archive" | "vault" | "rooms" | "graph" | "skills" | "crew" | "settings" | "guide" | "admin";
 
 const TABS: NavTab[] = [
   { id: "panel", label: "Home", icon: "🏠", group: "Workspace" },
   { id: "ask", label: "Ask Silvestar", icon: "🤖", group: "Workspace" },
   { id: "library", label: "Library", icon: "🗂", group: "Workspace" },
+  { id: "crew", label: "Crew", icon: "👥", group: "Workspace" },
   { id: "archive", label: "Archive", icon: "📚", group: "Knowledge" },
   { id: "vault", label: "Vault", icon: "🔒", group: "Knowledge" },
   { id: "graph", label: "Graph", icon: "🕸", group: "Knowledge" },
+  { id: "skills", label: "Skills", icon: "🧩", group: "System" },
   { id: "rooms", label: "Rooms", icon: "🎙", group: "System" },
   { id: "settings", label: "Settings", icon: "⚙️", group: "System" },
   { id: "guide", label: "Guide", icon: "📖", group: "System" },
@@ -72,7 +76,7 @@ export default function Home() {
   // PWA shortcuts / deep links land on /?tab=ask etc.
   useEffect(() => {
     const t = new URLSearchParams(window.location.search).get("tab") as Tab | null;
-    if (t && ["panel", "ask", "library", "archive", "vault", "rooms", "graph", "settings", "guide", "admin"].includes(t)) {
+    if (t && ["panel", "ask", "library", "archive", "vault", "rooms", "graph", "skills", "crew", "settings", "guide", "admin"].includes(t)) {
       setTab(t);
     }
   }, []);
@@ -258,6 +262,16 @@ export default function Home() {
         {tab === "vault" && (
           <ErrorBoundary>
             <VaultView userId={user.user_id} sessionToken={vaultSession} onUnlock={setVaultSession} />
+          </ErrorBoundary>
+        )}
+        {tab === "skills" && (
+          <ErrorBoundary>
+            <SkillsView authToken={authToken} userId={user.user_id} />
+          </ErrorBoundary>
+        )}
+        {tab === "crew" && (
+          <ErrorBoundary>
+            <CrewView userId={user.user_id} sessionToken={vaultSession} />
           </ErrorBoundary>
         )}
         {tab === "rooms" && <ErrorBoundary><RoomsView userId={user.user_id} /></ErrorBoundary>}
