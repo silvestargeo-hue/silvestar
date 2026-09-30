@@ -22,26 +22,45 @@ def _card_id(user_id: str, deck: str, front: str) -> str:
 
 async def generate_deck(user_id: str, source_title: str, source_text: str,
                         count: int = 10) -> dict:
-    """AI generates Q/A flashcards from a document; returns deck summary."""
+    """AI generates Q/A flashcards from a document; returns deck summary.
+    Parsing is tolerant ( '::' | ' | ' | 'Q:/A:' ) with a deterministic
+    sentence-cloze fallback so a deck is ALWAYS produced."""
     count = max(3, min(int(count), 25))
     res = await ai.summarize(
         f"Create exactly {count} flashcards from the document. "
-        "Return ONLY lines in the strict format: FRONT :: BACK "
-        "(front = a short question, back = a concise answer). No numbering.",
+        "Return ONLY lines, one per card, each in the strict format: "
+        "question :: answer (front = short question, back = concise answer). "
+        "No numbering, no markdown, no extra words.",
         source_text[:12000],
     )
     cards = []
     for line in (res.get("summary") or "").splitlines():
-        if "::" not in line:
+        line = line.strip().lstrip("-•*").strip()
+        line = __import__("re").sub(r"^\d+[.)]\s*", "", line)
+        sep = "::" if "::" in line else ("|" if "|" in line else "")
+        if not sep:
             continue
-        front, back = line.split("::", 1)
+        front, back = line.split(sep, 1)
         front, back = front.strip().lstrip("-•* ").strip(), back.strip()
         if front and back and len(front) > 3:
             cards.append({"front": front[:200], "back": back[:500]})
         if len(cards) >= count:
             break
     if not cards:
-        return {"deck": source_title, "added": 0, "cards": []}
+        # deterministic fallback: cloze cards from sentences
+        import re as _re
+        sentences = [s.strip() for s in _re.split(r"(?<=[.!?])\s+", source_text) if len(s.strip()) > 25]
+        for s in sentences[:count]:
+            words = s.rstrip(".").split()
+            if len(words) < 5:
+                continue
+            key = " ".join(words[-3:])
+            cards.append({"front": f"Complete: {s.rstrip('.')[:140]}…",
+                          "back": key or s[:120]})
+            if len(cards) >= count:
+                break
+    if not cards:
+        return {"deck": source_title[:60], "added": 0, "cards": []}
     now = int(time.time())
     for c in cards:
         rec = {

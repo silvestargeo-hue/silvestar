@@ -609,19 +609,14 @@ async def studio_data_chat(body: DataChatIn, request: Request):
                            "sum": round(sum(vals), 4), "avg": round(sum(vals) / len(vals), 4),
                            "n": len(vals)}
     sample = "\n".join(", ".join(f"{k}={r.get(k, '')}" for k in cols[:6]) for r in rows[:15])
-    res = await ai.chat(
-        body.q, uid, "", None,
-        use_skills=False,
-    )
-    # override context with the computed profile for exactness
     ctx = (f"CSV columns: {cols}\nRows: {len(rows)}\n"
            f"Numeric profiles: {profiles}\nSample rows:\n{sample}")
     res2 = await ai.summarize(
-        "Answer the user's question about this CSV using ONLY the computed numbers. "
-        "Be concise; mention exact figures.",
+        "Answer the user's question about this CSV using ONLY the computed numbers "
+        "in the data below. Be concise; mention exact figures.",
         f"QUESTION: {body.q}\n\n{ctx[:12000]}",
     )
-    return {"answer": res2.get("summary") or res.get("answer", ""),
+    return {"answer": res2.get("summary", ""),
             "columns": cols, "rows": len(rows), "numeric": list(profiles.keys())}
 
 
