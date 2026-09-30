@@ -303,7 +303,7 @@ def wants_tools(question: str) -> dict:
         need["math"] = True
     if re.search(r"\b(what|current)?\s*(time|date|day)\b.*\b(now|today|current)\b|\btime now\b|\btoday's date\b|\bwhat day\b", question, re.I):
         need["datetime"] = True
-    if OMNI_RE.search(question) and not need["read_url"]:
+    if OMNI_RE.search(question) and not need["read_url"] and not need["math"]:
         need["omniverse"] = True
     return {k: v for k, v in need.items() if v}
 
