@@ -5,7 +5,7 @@
  *  Files are stored on GitHub (free) and extracted text is AI-searchable. */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
-import { toast, Modal, copyText } from "@/lib/kit";
+import { toast, Modal, copyText, renderMarkdown } from "@/lib/kit";
 import { useI18n } from "@/lib/i18n";
 
 type FileMeta = {
@@ -689,7 +689,11 @@ export function LibraryView({ userId, sessionToken, onChatWithFile }: {
               // eslint-disable-next-line @next/next/no-img-element
               <img src={viewUrl} alt={viewFile.name} className="viewer-img" />
             )}
-            {viewText && <pre className="viewer-text">{viewText.slice(0, 20000)}</pre>}
+            {viewText && (
+              /\.(md|markdown)$/i.test(viewFile.name)
+                ? <div className="viewer-text">{renderMarkdown(viewText.slice(0, 20000))}</div>
+                : <pre className="viewer-text">{viewText.slice(0, 20000)}</pre>
+            )}
             <div className="row gap" style={{ marginTop: 12 }}>
               <button className="btn primary" onClick={() => dl(viewFile)}>⬇ Download</button>
               <span className="muted small">{fmtSize(viewFile.size)} · {viewFile.mime}{viewFile.indexed ? " · searchable by AI" : ""}</span>

@@ -143,6 +143,52 @@ async def list_skills(user_id: str) -> dict:
     return {"skills": await _user_skills(user_id)}
 
 
+# ------------------------------------------------------------ usage stats --
+_STATS_KEY = "skills-usage"
+
+
+def _record_usage_sync(names: list[str]) -> None:
+    """Best-effort usage counter bump (fire-and-forget style; wrapped by caller)."""
+    import asyncio
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(_bump_usage(names))
+    except Exception:
+        pass
+
+
+async def _bump_usage(names: list[str]) -> None:
+    import json as _j
+    try:
+        doc = await db.fetch(_STATS_KEY)
+        stats = {}
+        if doc and isinstance(doc.get("content"), str):
+            try:
+                stats = _j.loads(doc["content"])
+            except Exception:
+                stats = {}
+        for n in names:
+            if n:
+                stats[n] = int(stats.get(n, 0)) + 1
+        await db.upsert_document(_STATS_KEY, "skills", "usage", _j.dumps(stats),
+                                 meta={"kind": "usage"})
+    except Exception:
+        pass
+
+
+async def usage_stats() -> dict:
+    """How often each skill auto-fired, sorted desc: {'name': count}."""
+    import json as _j
+    doc = await db.fetch(_STATS_KEY)
+    stats: dict = {}
+    if doc and isinstance(doc.get("content"), str):
+        try:
+            stats = _j.loads(doc["content"])
+        except Exception:
+            stats = {}
+    return dict(sorted(stats.items(), key=lambda kv: -kv[1]))
+
+
 # --------------------------------------------------------- relevance matching --
 _SKILL_STOP = {
     "the", "and", "for", "with", "you", "your", "are", "not", "but", "his",

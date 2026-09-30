@@ -271,11 +271,13 @@ class SilvestarAI:
         active: list = []
         if use_skills:
           try:
-            from .skills import _user_skills
+            from .skills import _user_skills, _record_usage_sync
             all_sk = await _user_skills(user_id)
             active = relevant_skills(all_sk, question)
             skills_block = skills_system_block(active)
             skill_names = [s.get("name", "") for s in active]
+            if skill_names:
+                _record_usage_sync(skill_names)
             # skills can force their declared tools even if the question
             # wouldn't auto-trigger them (pipeline-style skills)
             fctx, ftools = await run_skill_tools(active, question)

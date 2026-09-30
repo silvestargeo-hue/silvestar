@@ -3,14 +3,14 @@
 /** Crew — multi-agent cowork: manager → researcher → writer → reviewer.
  *  Free, runs on the platform's own AI chain. */
 import { useEffect, useState } from "react";
-import { copyText, toast, useSpeechInput } from "@/lib/kit";
+import { copyText, toast, useSpeechInput, renderMarkdown } from "@/lib/kit";
 import { useI18n } from "@/lib/i18n";
 
 const API = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
 
 type CrewResult = {
   task: string; plan: string; research: string; draft: string; final: string;
-  agents: string[]; tools_used: string[];
+  agents: string[]; tools_used: string[]; skills_applied?: string[];
   citations: { i: number; library: string; title: string; score: number }[];
   latency_ms: number;
 };
@@ -133,11 +133,21 @@ export function CrewView({ userId, sessionToken }: { userId: string; sessionToke
 
       {res && (
         <>
+          {/* pipeline progress bar: every agent that ran */}
           <div className="card">
+            <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
+              {res.agents.map((a, i) => (
+                <div key={a} style={{
+                  flex: 1, height: 6, borderRadius: 4,
+                  background: i === 0 ? "#8a05ff55" : i === res.agents.length - 1 ? "#8a05ff" : "#8a05ff88",
+                }} title={a} />
+              ))}
+            </div>
             <div className="row" style={{ justifyContent: "space-between", flexWrap: "wrap" }}>
               <span style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                 {res.agents.map((a) => <Badge key={a}>🤖 {a}</Badge>)}
                 {res.tools_used.map((tl) => <Badge key={tl}>🔧 {tl}</Badge>)}
+                {(res.skills_applied || []).map((s) => <Badge key={s}>🧩 {s}</Badge>)}
                 <Badge>{res.latency_ms} ms</Badge>
               </span>
               <button className="mini" onClick={() => { copyText(res.final); toast("Final copied", "ok"); }}>📋 Copy</button>
@@ -146,19 +156,19 @@ export function CrewView({ userId, sessionToken }: { userId: string; sessionToke
 
           <details className="card" open>
             <summary><b>✅ {t("crewFinal")}</b></summary>
-            <p style={{ whiteSpace: "pre-wrap", lineHeight: 1.55 }}>{res.final}</p>
+            <div style={{ lineHeight: 1.55 }}>{renderMarkdown(res.final)}</div>
           </details>
           <details className="card">
             <summary><b>🧭 {t("crewPlan")}</b></summary>
-            <p style={{ whiteSpace: "pre-wrap" }}>{res.plan}</p>
+            <div style={{ lineHeight: 1.5 }}>{renderMarkdown(res.plan)}</div>
           </details>
           <details className="card">
             <summary><b>🔍 {t("crewResearch")}</b></summary>
-            <p style={{ whiteSpace: "pre-wrap" }}>{res.research}</p>
+            <div style={{ lineHeight: 1.5 }}>{renderMarkdown(res.research)}</div>
           </details>
           <details className="card">
             <summary><b>✍️ {t("crewDraft")}</b></summary>
-            <p style={{ whiteSpace: "pre-wrap" }}>{res.draft}</p>
+            <div style={{ lineHeight: 1.5 }}>{renderMarkdown(res.draft)}</div>
           </details>
           {res.citations.length > 0 && (
             <div className="card">

@@ -23,6 +23,7 @@ export function SkillsView({ authToken, userId }: { authToken: string; userId: s
   const [installing, setInstalling] = useState(false);
   const [installInfo, setInstallInfo] = useState("");
   const [query, setQuery] = useState("");
+  const [usage, setUsage] = useState<Record<string, number>>({});
 
   const load = useCallback(async () => {
     try {
@@ -34,6 +35,10 @@ export function SkillsView({ authToken, userId }: { authToken: string; userId: s
     } catch {
       toast("Failed to load skills", "err");
     }
+    try {
+      const r2 = await fetch(`${API}/api/v1/skills/stats`);
+      if (r2.ok) setUsage((await r2.json()).usage || {});
+    } catch {}
   }, [authToken]);
 
   useEffect(() => { load(); }, [load]);
@@ -135,6 +140,29 @@ export function SkillsView({ authToken, userId }: { authToken: string; userId: s
           <span className="muted small">{t("skillsAutoHint")}</span>
         </div>
       </div>
+
+      {/* skill analytics: most auto-fired skills */}
+      {Object.keys(usage).length > 0 && (
+        <div className="card" style={{ marginBottom: 14 }}>
+          <b>📊 {t("skillStats")}</b>
+          <div style={{ marginTop: 8 }}>
+            {Object.entries(usage).slice(0, 5).map(([name, count]) => {
+              const max = Math.max(...Object.values(usage));
+              return (
+                <div key={name} style={{ marginBottom: 6 }}>
+                  <div className="row" style={{ justifyContent: "space-between", marginBottom: 2 }}>
+                    <span className="small">🧩 {name}</span>
+                    <span className="muted small">{count}×</span>
+                  </div>
+                  <div style={{ height: 6, borderRadius: 4, background: "rgba(128,128,128,.18)" }}>
+                    <div style={{ width: `${(count / max) * 100}%`, height: "100%", borderRadius: 4, background: "#8a05ff" }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <h3>🧠 {t("mySkills")} ({mine.length})</h3>
       {filt(mine).length === 0 ? (

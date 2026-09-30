@@ -418,6 +418,14 @@ async def skills_publish(skill_id: str, request: Request):
     return {"published": True, "gallery_id": out["id"], "name": name}
 
 
+@app.get("/api/v1/skills/stats", tags=["skills"])
+async def skills_stats(request: Request):
+    """Skill analytics: how many times each skill auto-fired across all asks."""
+    await _uid_async(request)
+    stats = await skills_svc.usage_stats()
+    return {"usage": stats, "total_fires": sum(stats.values())}
+
+
 @app.post("/api/v1/skills/auto-install", tags=["skills"])
 async def skills_auto_install(request: Request):
     """Daily GitHub harvest: install a fresh batch of free AI skills from top repos."""

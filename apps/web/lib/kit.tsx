@@ -101,6 +101,62 @@ export function useSpeechInput(onResult: (text: string) => void) {
   return { listening, start, stop, supported: typeof window !== "undefined" && !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition) };
 }
 
+/* ---------------------------------------------------------- mini markdown */
+/** Render a small subset of markdown (headings, bold, italics, code, lists,
+ *  links, hr) to React elements — no dependency, XSS-safe (no raw HTML). */
+export function renderMarkdown(src: string): React.ReactNode[] {
+  const out: React.ReactNode[] = [];
+  const lines = (src || "").split(/\r?\n/);
+  let list: string[] = [];
+  let key = 0;
+  const inline = (s: string): React.ReactNode[] => {
+    const parts: React.ReactNode[] = [];
+    const re = /\*\*([^*]+)\*\*|\*([^*]+)\*|`([^`]+)`|\[([^\]]+)\]\(([^)]+)\)/g;
+    let last = 0, m: RegExpExecArray | null, k = 0;
+    while ((m = re.exec(s))) {
+      if (m.index > last) parts.push(s.slice(last, m.index));
+      if (m[1]) parts.push(<b key={k++}>{m[1]}</b>);
+      else if (m[2]) parts.push(<i key={k++}>{m[2]}</i>);
+      else if (m[3]) parts.push(<code key={k++} style={{ background: "rgba(138,5,255,.12)", padding: "1px 5px", borderRadius: 5 }}>{m[3]}</code>);
+      else if (m[4] && m[5]) parts.push(<a key={k++} href={m[5]} target="_blank" rel="noreferrer">{m[4]}</a>);
+      last = re.lastIndex;
+    }
+    if (last < s.length) parts.push(s.slice(last));
+    return parts;
+  };
+  const flushList = () => {
+    if (list.length) {
+      out.push(<ul key={key++} style={{ margin: "6px 0", paddingLeft: 20 }}>{list.map((li, i) => <li key={i}>{inline(li)}</li>)}</ul>);
+      list = [];
+    }
+  };
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    const h = /^(#{1,4})\s+(.*)$/.exec(line);
+    const li = /^\s*[-*•]\s+(.*)$/.exec(line);
+    const num = /^\s*\d+[.)]\s+(.*)$/.exec(line);
+    if (h) {
+      flushList();
+      const lvl = h[1].length;
+      out.push(lvl <= 2
+        ? <h3 key={key++} style={{ margin: "10px 0 4px" }}>{inline(h[2])}</h3>
+        : <h4 key={key++} style={{ margin: "8px 0 3px" }}>{inline(h[2])}</h4>);
+    } else if (li || num) {
+      list.push((li ? li[1] : num![1]));
+    } else if (/^---+$/.test(line)) {
+      flushList();
+      out.push(<hr key={key++} style={{ border: 0, borderTop: "1px solid rgba(128,128,128,.3)", margin: "10px 0" }} />);
+    } else if (!line.trim()) {
+      flushList();
+    } else {
+      flushList();
+      out.push(<p key={key++} style={{ margin: "5px 0" }}>{inline(line)}</p>);
+    }
+  }
+  flushList();
+  return out;
+}
+
 /* ------------------------------------------------------------- highlight */
 export function esc(s: string) { return s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!)); }
 

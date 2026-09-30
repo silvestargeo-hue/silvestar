@@ -15,7 +15,7 @@ def _bool(v: str) -> bool:
 @dataclass
 class Settings:
     app_name: str = "Silvestar Platform"
-    version: str = "1.2.0"
+    version: str = "1.3.0"
 
     # --- Module 3/4: database (pgvector) ---
     database_url: str = field(
