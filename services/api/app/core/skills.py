@@ -298,7 +298,8 @@ def wants_tools(question: str) -> dict:
     need: dict[str, bool] = {"omniverse": False, "math": False, "datetime": False, "read_url": False}
     if URL_RE.search(question):
         need["read_url"] = True
-    if MATH_RE.match(question.strip().rstrip("?").strip()) and any(c in question for c in "+-*/^"):
+    # embedded arithmetic: "what is 6*7?", "128*447", "(12+5)/3" …
+    if re.search(r"\d\s*[\+\-\*\/\^]\s*\d", question):
         need["math"] = True
     if re.search(r"\b(what|current)?\s*(time|date|day)\b.*\b(now|today|current)\b|\btime now\b|\btoday's date\b|\bwhat day\b", question, re.I):
         need["datetime"] = True
@@ -318,7 +319,9 @@ async def run_tools(question: str) -> tuple[str, list[str]]:
             blocks.append(f"[web:{url}] {res['text'][:2500]}")
             used.append("read_url")
     if needs.get("math"):
-        expr = question.strip().rstrip("?").strip()
+        # evaluate the first arithmetic substring found
+        m = re.search(r"\(?[\d,]+(?:\.[\d+]+)?(?:\s*[\+\-\*\/\^]\s*\(?[\d,]+(?:\.[\d+]+)?\)?)+", question)
+        expr = m.group(0) if m else question.strip().rstrip("?").strip()
         res = tool_math(expr)
         if res.get("ok"):
             blocks.append(f"[math] {res['expr']} = {res['result']}")
