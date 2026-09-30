@@ -9,6 +9,7 @@ last resort so the assistant ALWAYS answers:
 """
 from __future__ import annotations
 
+import json
 import re
 import time
 from urllib.parse import quote
@@ -17,7 +18,7 @@ from typing import Any
 import httpx
 
 from ..config import settings
-from .rag import build_context, system_prompt
+from .rag import build_context, build_file_context, system_prompt
 
 
 class SilvestarAI:
@@ -111,6 +112,64 @@ class SilvestarAI:
             pass
         return None
 
+    async def _groq_stream(self, messages: list[dict]):
+        """Yield text deltas from Groq streaming (no yield = engine unavailable)."""
+        if not settings.groq_api_key:
+            return
+        try:
+            async with httpx.AsyncClient(timeout=settings.ai_timeout) as client:
+                async with client.stream(
+                    "POST", "https://api.groq.com/openai/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {settings.groq_api_key}"},
+                    json={"model": settings.groq_model, "messages": messages, "stream": True},
+                ) as r:
+                    if r.status_code != 200:
+                        return
+                    async for line in r.aiter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        data = line[6:]
+                        if data.strip() == "[DONE]":
+                            return
+                        try:
+                            delta = json.loads(data)["choices"][0]["delta"].get("content")
+                        except Exception:
+                            delta = None
+                        if delta:
+                            yield delta
+        except Exception:
+            return
+
+    async def _post_openai_stream(self, messages: list[dict]):
+        """Yield deltas from the OpenAI-compatible endpoint with model failover."""
+        headers = {"Content-Type": "application/json"}
+        if settings.ai_api_key:
+            headers["Authorization"] = f"Bearer {settings.ai_api_key}"
+        for model in [settings.ai_model, *settings.ai_failover_models]:
+            try:
+                async with httpx.AsyncClient(timeout=settings.ai_timeout) as client:
+                    async with client.stream(
+                        "POST", settings.ai_primary_url, headers=headers,
+                        json={"model": model, "messages": messages, "stream": True},
+                    ) as r:
+                        if r.status_code != 200:
+                            continue
+                        async for line in r.aiter_lines():
+                            if not line.startswith("data: "):
+                                continue
+                            data = line[6:]
+                            if data.strip() == "[DONE]":
+                                break
+                            try:
+                                delta = json.loads(data)["choices"][0]["delta"].get("content")
+                            except Exception:
+                                delta = None
+                            if delta:
+                                yield delta
+                        return
+            except Exception:
+                continue
+
     async def _get_completion(self, prompt: str) -> str | None:
         try:
             async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
@@ -168,20 +227,16 @@ class SilvestarAI:
             engine = "local-extractive"
         return {"summary": answer, "engine": engine}
 
-    async def chat(self, question: str, user_id: str = "anon", vault_session_token: str = "",
-                   history: list[dict] | None = None, lang: str = "", folder: str = "") -> dict:
-        t0 = time.time()
-        session = None
-        if vault_session_token:
-            from .vault import vault as vault_svc
-            session = await vault_svc.validate(user_id, vault_session_token)
-
-        context, cited = await build_context(question, user_id, session, folder=folder)
+    def _build_messages(self, question: str, context: str, cited: list,
+                        history: list[dict] | None = None, lang: str = "") -> list[dict]:
         sys = system_prompt(context, cited)
         if lang and lang != "en":
             _names = {
                 "hi": "Hindi (हिन्दी, Devanagari script)",
                 "ne": "Nepali (नेपाली, Devanagari script)",
+                "es": "Spanish (Español)",
+                "ar": "Arabic (العربية, right-to-left script)",
+                "fr": "French (Français)",
             }
             lname = _names.get(lang, lang)
             sys += (f"\n\nIMPORTANT: Reply ONLY in {lname}, regardless of the language of the "
@@ -190,6 +245,26 @@ class SilvestarAI:
         for m in (history or [])[-8:]:
             messages.append({"role": m.get("role", "user"), "content": str(m.get("content", ""))[:4000]})
         messages.append({"role": "user", "content": question})
+        return messages
+
+    async def _context_for(self, question: str, user_id: str, session,
+                           folder: str = "", file_path: str = ""):
+        if file_path:
+            return await build_file_context(question, user_id, file_path)
+        return await build_context(question, user_id, session, folder=folder)
+
+    async def chat(self, question: str, user_id: str = "anon", vault_session_token: str = "",
+                   history: list[dict] | None = None, lang: str = "", folder: str = "",
+                   file_path: str = "") -> dict:
+        t0 = time.time()
+        session = None
+        if vault_session_token:
+            from .vault import vault as vault_svc
+            session = await vault_svc.validate(user_id, vault_session_token)
+
+        context, cited = await self._context_for(question, user_id, session,
+                                                 folder=folder, file_path=file_path)
+        messages = self._build_messages(question, context, cited, history, lang)
 
         context_suffix = ("\n\nContext:\n" + context) if context else ""
         # runtime model override (set from the Admin Panel) wins over config
@@ -225,6 +300,57 @@ class SilvestarAI:
             "vault_unlocked": bool(session and session.valid),
             "latency_ms": int((time.time() - t0) * 1000),
         }
+
+    async def stream_chat(self, question: str, user_id: str = "anon", vault_session_token: str = "",
+                          history: list[dict] | None = None, lang: str = "", folder: str = "",
+                          file_path: str = ""):
+        """Yield SSE dicts: {'type':'meta'|'delta'|'done'|'error', ...}. Always ends
+        with a done event carrying the full answer text and citations."""
+        t0 = time.time()
+        try:
+            session = None
+            if vault_session_token:
+                from .vault import vault as vault_svc
+                session = await vault_svc.validate(user_id, vault_session_token)
+            context, cited = await self._context_for(question, user_id, session,
+                                                     folder=folder, file_path=file_path)
+            messages = self._build_messages(question, context, cited, history, lang)
+            citations = [{"i": i, "library": c.library, "title": c.title, "score": c.score,
+                          "doc_id": c.doc_id} for i, c in enumerate(cited, 1)]
+            yield {"type": "meta", "citations": citations,
+                   "vault_unlocked": bool(session and session.valid)}
+
+            answer = ""
+            engine = "local-extractive"
+            async for delta in self._groq_stream(messages):
+                engine = "groq"
+                answer += delta
+                yield {"type": "delta", "text": delta}
+            if not answer:
+                async for delta in self._post_openai_stream(messages):
+                    engine = "openai-compatible"
+                    answer += delta
+                    yield {"type": "delta", "text": delta}
+            if not answer:
+                # non-streaming fallback chain (groq/gemini/openrouter/etc.)
+                override_model = None
+                try:
+                    from .cache import cache
+                    override_model = await cache.get("ai:model")
+                except Exception:
+                    pass
+                fallback = await self._post_openai(messages, override_model or settings.ai_model)
+                if fallback:
+                    engine = "openai-compatible"
+                    answer = fallback
+                    yield {"type": "delta", "text": answer}
+            if not answer:
+                answer = self._local_extractive(question, context)
+                yield {"type": "delta", "text": answer}
+            yield {"type": "done", "answer": answer, "engine": engine,
+                   "citations": citations, "latency_ms": int((time.time() - t0) * 1000)}
+        except Exception as e:
+            yield {"type": "error", "detail": str(e)[:200]}
 
     async def health(self) -> dict:
         try:

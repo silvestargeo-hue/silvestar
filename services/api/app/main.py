@@ -100,8 +100,9 @@ class AskIn(BaseModel):
     user_id: str = "anon"
     vault_session_token: str = ""
     history: list[dict] = []
-    lang: str = ""     # reply language: en | hi | ne (empty = auto/English)
+    lang: str = ""     # reply language: en|hi|ne|es|ar|fr (empty = auto/English)
     folder: str = ""   # scope RAG to a Library folder (files:<uid> only)
+    file_path: str = ""  # chat with ONE Library file (overrides folder)
 
 
 class GraphNodeIn(BaseModel):
@@ -280,7 +281,44 @@ async def rag_query(body: AskIn):
 async def ask(body: AskIn, request: Request):
     uid = body.user_id or await _uid_async(request)
     return await ai.chat(body.question, uid, body.vault_session_token, body.history,
-                         lang=body.lang, folder=body.folder)
+                         lang=body.lang, folder=body.folder, file_path=body.file_path)
+
+
+@app.post("/api/v1/ask/stream", tags=["ai"])
+async def ask_stream(body: AskIn, request: Request):
+    """Server-Sent Events: meta → delta* → done. Same fallback guarantees as /ask."""
+    uid = body.user_id or await _uid_async(request)
+
+    async def gen():
+        async for ev in ai.stream_chat(body.question, uid, body.vault_session_token,
+                                       body.history, lang=body.lang, folder=body.folder,
+                                       file_path=body.file_path):
+            yield f"data: {__import__('json').dumps(ev)}\n\n"
+
+    from fastapi.responses import StreamingResponse
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.get("/api/v1/files/search", tags=["files"])
+async def files_semantic_search(request: Request, q: str = Query(..., min_length=1, max_length=500),
+                                limit: int = Query(10, ge=1, le=30)):
+    """Natural-language search over the user's Library file contents (RAG index)."""
+    uid = await _uid_async(request)
+    hits = await db.search(f"files:{uid}", q, limit=max(limit * 3, limit))
+    out = []
+    for h in hits:
+        m = h.get("meta") or {}
+        if m.get("kind") != "file" or not h.get("content"):
+            continue
+        out.append({
+            "id": h["id"], "title": h["title"], "path": m.get("path", ""),
+            "folder": m.get("folder", ""), "mime": m.get("mime", ""),
+            "score": h["score"], "snippet": (h.get("content") or "")[:220],
+        })
+        if len(out) >= limit:
+            break
+    return {"query": q, "results": out, "total": len(out)}
 
 
 @app.get("/api/v1/ai/health", tags=["ai"])

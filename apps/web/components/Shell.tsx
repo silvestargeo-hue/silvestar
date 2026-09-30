@@ -5,7 +5,7 @@
 import { useEffect, useState } from "react";
 import { useTheme } from "@/lib/kit";
 import { api } from "@/lib/api";
-import { useI18n } from "@/lib/i18n";
+import { useI18n, isRtl } from "@/lib/i18n";
 
 export type NavTab = { id: string; label: string; icon: string; admin?: boolean; group?: string };
 
@@ -66,6 +66,12 @@ export function Shell({ tabs, active, onNavigate, headerExtra, footer, children 
   const rest = tabs.filter((t) => !GROUP_ORDER.includes(groupLabel(t)));
   if (rest.length) groups.push({ label: "More", items: rest });
   const activeTab = tabs.find((t) => t.id === active);
+
+  // Arabic UI = right-to-left document direction
+  useEffect(() => {
+    document.documentElement.setAttribute("dir", isRtl(i18n.lang) ? "rtl" : "ltr");
+    return () => document.documentElement.setAttribute("dir", "ltr");
+  }, [i18n.lang]);
 
   return (
     <div className="shell">

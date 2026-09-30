@@ -102,6 +102,21 @@ async def build_context(query: str, user_id: str, vault_session: "VaultSessionIn
     return "\n\n".join(blocks), hits
 
 
+async def build_file_context(query: str, user_id: str, file_path: str) -> tuple[str, list[Retrieved]]:
+    """Context built ONLY from one Library file's indexed text (chat-with-one-file)."""
+    rel = file_path.split("/", 2)[2] if file_path.count("/") >= 2 else file_path
+    doc_id = "d-" + _fdoc_id(user_id, file_path)[2:]
+    from .db import db
+    doc = await db.fetch(doc_id)
+    if not doc or not doc.get("content"):
+        return "", []
+    r = Retrieved(doc["id"], "files", doc["title"], doc["content"][:400], 1.0,
+                  folder=rel.rsplit("/", 1)[0] if "/" in rel else "")
+    block = f"[1] ({r.library}) {r.title}: {doc['content'][:14_000]}"
+    r.cited = True
+    return block, [r]
+
+
 def system_prompt(context: str, cited: list[Retrieved]) -> str:
     base = (
         "You are Silvestar, the AI assistant of the Silvestar platform. "

@@ -109,15 +109,57 @@ export const api = {
 
   // AI
   ask: (question: string, user_id: string, vault_session_token = "", history: { role: string; content: string }[] = [],
-        opts: { lang?: string; folder?: string } = {}) =>
+        opts: { lang?: string; folder?: string; file_path?: string } = {}) =>
     req<AskResult>("/api/v1/ask", {
       method: "POST",
       body: JSON.stringify({
         question, user_id, vault_session_token, history,
         ...(opts.lang ? { lang: opts.lang } : {}),
         ...(opts.folder ? { folder: opts.folder } : {}),
+        ...(opts.file_path ? { file_path: opts.file_path } : {}),
       }),
     }),
+
+  fileSearch: (q: string) =>
+    req<{ query: string; total: number; results: { id: string; title: string; path: string; folder: string; mime: string; score: number; snippet: string }[] }>(
+      `/api/v1/files/search?q=${encodeURIComponent(q)}`
+    ),
+
+  /** SSE stream of an ask: yields {type:'meta'|'delta'|'done'|'error', ...} events. */
+  askStream: async function* (
+    question: string, user_id: string, vault_session_token = "",
+    history: { role: string; content: string }[] = [],
+    opts: { lang?: string; folder?: string; file_path?: string } = {},
+    signal?: AbortSignal,
+  ) {
+    const res = await fetch(`${API_URL}/api/v1/ask/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal,
+      body: JSON.stringify({
+        question, user_id, vault_session_token, history,
+        ...(opts.lang ? { lang: opts.lang } : {}),
+        ...(opts.folder ? { folder: opts.folder } : {}),
+        ...(opts.file_path ? { file_path: opts.file_path } : {}),
+      }),
+    });
+    if (!res.ok || !res.body) throw new Error(`${res.status}: ${res.statusText}`);
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const parts = buf.split("\n\n");
+      buf = parts.pop() || "";
+      for (const p of parts) {
+        const line = p.trim();
+        if (!line.startsWith("data: ")) continue;
+        try { yield JSON.parse(line.slice(6)); } catch {}
+      }
+    }
+  },
 
   // Rooms / realtime
   roomToken: (room: string, identity: string) =>

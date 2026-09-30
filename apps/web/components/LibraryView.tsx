@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { toast, Modal, copyText } from "@/lib/kit";
+import { useI18n } from "@/lib/i18n";
 
 type FileMeta = {
   id: string; name: string; path: string; folder: string;
@@ -42,7 +43,10 @@ function icon(mime: string, name: string): string {
   return "📦";
 }
 
-export function LibraryView({ userId, sessionToken }: { userId: string; sessionToken: string }) {
+export function LibraryView({ userId, sessionToken, onChatWithFile }: {
+  userId: string; sessionToken: string; onChatWithFile?: (f: { path: string; name: string }) => void;
+}) {
+  const { t } = useI18n();
   const [data, setData] = useState<ListRes>({ files: [], folders: [], total: 0 });
   const [folder, setFolder] = useState("");          // current folder
   const [query, setQuery] = useState("");
@@ -67,6 +71,11 @@ export function LibraryView({ userId, sessionToken }: { userId: string; sessionT
   const [dragPaths, setDragPaths] = useState<string[]>([]);
   const [hoverFolder, setHoverFolder] = useState("");
   const [zipping, setZipping] = useState(false);
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiQuery, setAiQuery] = useState("");
+  const [aiResults, setAiResults] = useState<{ title: string; path: string; folder: string; score: number; snippet: string }[]>([]);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiTried, setAiTried] = useState(false);
   const [design, setDesign] = useState<{ accent: string; view: "grid" | "list" }>(
     () => { try { return JSON.parse(localStorage.getItem("sv-library-design") || '{"accent":"#8a05ff","view":"grid"}'); } catch { return { accent: "#8a05ff", view: "grid" as const }; } }
   );
@@ -339,6 +348,28 @@ export function LibraryView({ userId, sessionToken }: { userId: string; sessionT
     } catch { toast("Could not create folder", "err"); }
   };
 
+  // ------------------------------------------------------- AI file search --
+  const runAiSearch = async () => {
+    const q = aiQuery.trim();
+    if (!q || aiBusy) return;
+    setAiBusy(true);
+    try {
+      const r = await fetch(`${API}/api/v1/files/search?q=${encodeURIComponent(q)}`,
+        { headers: authHeaders(sessionToken, userId) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.detail || `${r.status}`);
+      setAiResults(j.results || []);
+      setAiTried(true);
+    } catch (e) {
+      toast(String(e instanceof Error ? e.message : e), "err");
+    } finally { setAiBusy(false); }
+  };
+
+  const chatWithFile = (f: FileMeta) => {
+    if (!f.indexed) { toast("This file has no extractable text to chat with", "err"); return; }
+    onChatWithFile?.({ path: f.path, name: f.name });
+  };
+
   // ------------------------------------------------------------- render ---
   const crumbs = folder ? folder.split("/") : [];
   const visible = query
@@ -355,8 +386,11 @@ export function LibraryView({ userId, sessionToken }: { userId: string; sessionT
           </p>
         </div>
         <div className="row gap">
-          <input className="input" placeholder="Search files…" value={query}
+          <input className="input" placeholder={t("searchFiles")} value={query}
             onChange={(e) => setQuery(e.target.value)} style={{ width: 160 }} />
+          <button className="btn ghost" onClick={() => setAiOpen(!aiOpen)} title={t("aiSearchHint")}>
+            ✨ {t("aiSearch")}
+          </button>
           <button className="btn ghost" onClick={() => saveDesign({ ...design, view: design.view === "grid" ? "list" : "grid" })}>
             {design.view === "grid" ? "☰ List" : "▦ Grid"}
           </button>
@@ -373,6 +407,34 @@ export function LibraryView({ userId, sessionToken }: { userId: string; sessionT
       <input ref={bulkRef} type="file" multiple hidden onChange={(e) => { doUpload(e.target.files, true); e.target.value = ""; }} />
 
       {uploading && <div className="muted">Uploading…</div>}
+
+      {/* AI semantic search panel */}
+      {aiOpen && (
+        <div className="card" style={{ marginBottom: 12 }}>
+          <b>✨ {t("aiSearch")}</b>
+          <div className="hint">{t("aiSearchHint")}</div>
+          <div className="row">
+            <input value={aiQuery} placeholder={t("aiSearchEmpty")}
+              onChange={(e) => setAiQuery(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && runAiSearch()} />
+            <button onClick={runAiSearch} disabled={aiBusy}>{aiBusy ? "…" : t("aiSearchBtn")}</button>
+          </div>
+          {aiResults.map((r) => (
+            <div key={r.path} className="row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+              <span>
+                <b>{r.title}</b> <span className="muted small">· {r.folder || "root"} · {r.score}</span>
+                <div className="muted small">{r.snippet}</div>
+              </span>
+              <button className="btn tiny" onClick={() => chatWithFile({ path: r.path, name: r.title, indexed: true } as FileMeta)}>
+                💬 {t("chatWithFile")}
+              </button>
+            </div>
+          ))}
+          {aiTried && !aiBusy && aiResults.length === 0 && (
+            <div className="muted small">No matching files. Upload text-based files (PDF/Word/TXT…) so the AI can read them.</div>
+          )}
+        </div>
+      )}
 
       {/* breadcrumbs */}
       {crumbs.length > 0 && (
@@ -450,6 +512,7 @@ export function LibraryView({ userId, sessionToken }: { userId: string; sessionT
               <button className="btn tiny" onClick={() => { setMoveTarget(f); setMoveVal(f.folder); }} title="Move to folder">➡</button>
               <button className="btn tiny" onClick={() => setShareTarget(f)} title="Public share link">🔗</button>
               <button className="btn tiny" onClick={() => openVersions(f)} title="Version history">🕓</button>
+              {f.indexed && <button className="btn tiny" onClick={() => chatWithFile(f)} title={t("chatWithFile")}>💬</button>}
               <button className="btn tiny danger" onClick={() => doDelete(f)} title="Delete">🗑</button>
               </div>
             </div>
@@ -470,9 +533,9 @@ export function LibraryView({ userId, sessionToken }: { userId: string; sessionT
                   <button className="btn tiny" onClick={() => dl(f)}>⬇</button>
                   <button className="btn tiny" onClick={() => { setRenameTarget(f); setRenameVal(f.name); }}>✏</button>
                 <button className="btn tiny" onClick={() => { setMoveTarget(f); setMoveVal(f.folder); }}>➡</button>
-                <button className="btn tiny" onClick={() => setShareTarget(f)} title="Public share link">🔗</button>
-                <button className="btn tiny" onClick={() => openVersions(f)} title="Version history">🕓</button>
-                <button className="btn tiny danger" onClick={() => doDelete(f)}>🗑</button>
+                <button className="btn tiny" onClick={() => setShareTarget(f)} title="Public share link">🔗</button>                  <button className="btn tiny" onClick={() => openVersions(f)} title="Version history">🕓</button>
+                  {f.indexed && <button className="btn tiny" onClick={() => chatWithFile(f)} title={t("chatWithFile")}>💬</button>}
+                  <button className="btn tiny danger" onClick={() => doDelete(f)}>🗑</button>
                 </td>
               </tr>
             ))}
