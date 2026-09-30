@@ -19,7 +19,7 @@ import httpx
 
 from ..config import settings
 from .rag import build_context, build_file_context, system_prompt
-from .skills import relevant_skills, run_tools, skills_system_block
+from .skills import relevant_skills, run_skill_tools, run_tools, skills_system_block
 
 
 class SilvestarAI:
@@ -268,6 +268,7 @@ class SilvestarAI:
         else:
             tools_used = []
         skills_block, skill_names = "", []
+        active: list = []
         if use_skills:
           try:
             from .skills import _user_skills
@@ -275,6 +276,12 @@ class SilvestarAI:
             active = relevant_skills(all_sk, question)
             skills_block = skills_system_block(active)
             skill_names = [s.get("name", "") for s in active]
+            # skills can force their declared tools even if the question
+            # wouldn't auto-trigger them (pipeline-style skills)
+            fctx, ftools = await run_skill_tools(active, question)
+            if fctx:
+                extra = (extra + "\n\n" + fctx) if extra else fctx
+                tools_used = tools_used + ftools
           except Exception:
             pass
         if extra:
