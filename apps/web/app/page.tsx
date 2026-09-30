@@ -11,6 +11,8 @@ import { GraphView } from "@/components/GraphView";
 import { LibraryView } from "@/components/LibraryView";
 import { SkillsView } from "@/components/SkillsView";
 import { CrewView } from "@/components/CrewView";
+import { StudioView } from "@/components/StudioView";
+import { UniversalSearch } from "@/components/UniversalSearch";
 import { SettingsView } from "@/components/SettingsView";
 import { GuideView } from "@/components/GuideView";
 import { LockScreen } from "@/components/LockScreen";
@@ -25,7 +27,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useOnline, useTheme, toast } from "@/lib/kit";
 import "./lock.css";
 
-type Tab = "panel" | "ask" | "library" | "archive" | "vault" | "rooms" | "graph" | "skills" | "crew" | "settings" | "guide" | "admin";
+type Tab = "panel" | "ask" | "library" | "archive" | "vault" | "rooms" | "graph" | "skills" | "crew" | "studio" | "settings" | "guide" | "admin";
 
 const TABS: NavTab[] = [
   { id: "panel", label: "Home", icon: "🏠", group: "Workspace" },
@@ -35,6 +37,7 @@ const TABS: NavTab[] = [
   { id: "archive", label: "Archive", icon: "📚", group: "Knowledge" },
   { id: "vault", label: "Vault", icon: "🔒", group: "Knowledge" },
   { id: "graph", label: "Graph", icon: "🕸", group: "Knowledge" },
+  { id: "studio", label: "Studio", icon: "🎨", group: "Workspace" },
   { id: "skills", label: "Skills", icon: "🧩", group: "System" },
   { id: "rooms", label: "Rooms", icon: "🎙", group: "System" },
   { id: "settings", label: "Settings", icon: "⚙️", group: "System" },
@@ -62,6 +65,7 @@ export default function Home() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [usOpen, setUsOpen] = useState(false); // universal search
   const [locked, setLocked] = useState(false); // optional lock screen
   const [lockOn, setLockOn] = useState(false); // setting: lock on start
   const [vaultSession, setVaultSession] = useState<string>(""); // vault unlock (separate from login)
@@ -79,7 +83,7 @@ export default function Home() {
   useEffect(() => {
     const sp = new URLSearchParams(window.location.search);
     const t = sp.get("tab") as Tab | null;
-    if (t && ["panel", "ask", "library", "archive", "vault", "rooms", "graph", "skills", "crew", "settings", "guide", "admin"].includes(t)) {
+    if (t && ["panel", "ask", "library", "archive", "vault", "rooms", "graph", "skills", "crew", "studio", "settings", "guide", "admin"].includes(t)) {
       setTab(t);
     }
     // web clipper deep link: /?import=<text>&title=…&url=… (bookmarklet / mobile share)
@@ -158,6 +162,7 @@ export default function Home() {
   const commands: Cmd[] = [
     ...visibleTabs.map((t) => ({ id: "go-" + t.id, icon: t.icon, label: "Go to " + t.label, run: () => setTab(t.id as Tab) })),
     { id: "notif", icon: "🔔", label: "Open notifications", run: () => setNotifOpen(true) },
+    { id: "usearch", icon: "🔍", label: "Universal search", run: () => setUsOpen(true) },
     { id: "help", icon: "⌨", label: "Keyboard shortcuts", run: () => setHelpOpen(true) },
     { id: "settings", icon: "⚙️", label: "Open settings", run: goSettings },
     { id: "theme", icon: "🌓", label: "Toggle theme", run: toggleTheme },
@@ -202,6 +207,7 @@ export default function Home() {
             <button className="mini ghost bell" onClick={() => setNotifOpen(true)} aria-label="Notifications">
               🔔{notifCount > 0 && <span className="dot">{notifCount}</span>}
             </button>
+            <button className="mini ghost" onClick={() => setUsOpen(true)} aria-label="Universal search">🔍</button>
             <button className="mini ghost" onClick={() => setHelpOpen(true)} aria-label="Keyboard shortcuts">⌨</button>
             <div style={{ position: "relative" }}>
               <button className="mini ghost" onClick={() => setMenuOpen((o) => !o)}>
@@ -285,6 +291,11 @@ export default function Home() {
             <CrewView userId={user.user_id} sessionToken={vaultSession} />
           </ErrorBoundary>
         )}
+        {tab === "studio" && (
+          <ErrorBoundary>
+            <StudioView authToken={authToken} userId={user.user_id} />
+          </ErrorBoundary>
+        )}
         {tab === "rooms" && <ErrorBoundary><RoomsView userId={user.user_id} /></ErrorBoundary>}
         {tab === "graph" && <ErrorBoundary><GraphView /></ErrorBoundary>}
         {tab === "settings" && (
@@ -306,6 +317,9 @@ export default function Home() {
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} commands={commands} />
       <NotificationCenter userId={user.user_id} open={notifOpen} onClose={() => setNotifOpen(false)} onChanged={() => refreshNotifs()} />
       <ShortcutsOverlay open={helpOpen} onClose={() => setHelpOpen(false)} />
+      {usOpen && (
+        <UniversalSearch authToken={authToken} userId={user.user_id} onClose={() => setUsOpen(false)} />
+      )}
     </div>
   );
 }

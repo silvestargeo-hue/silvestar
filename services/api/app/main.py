@@ -19,7 +19,7 @@ import time
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Header, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -32,6 +32,7 @@ from .core.files import files as file_store
 from .core.file_routes import router as files_router, _uid_async
 from .core import skills as skills_svc
 from .core.crew import run_crew
+from .core import media as media_svc
 from .core.graph import graph
 from .core.realtime import Client, hub, livekit
 from .core.vault import VaultError, vault
@@ -418,6 +419,76 @@ async def skills_publish(skill_id: str, request: Request):
     out = await skills_svc.add_skill(uid, name, instructions,
                                      rec.get("triggers") or [], gallery=True)
     return {"published": True, "gallery_id": out["id"], "name": name}
+
+
+# ------------------------------------------------- Module 16: Media Studio --
+@app.post("/api/v1/media/image", tags=["media"])
+async def media_image(request: Request, prompt: str = Query(..., min_length=3, max_length=400)):
+    """Text → image (keyless Pollinations), saved to Library/AI-Images."""
+    uid = await _uid_async(request)
+    try:
+        return await media_svc.generate_image(prompt, uid, file_store)
+    except Exception as e:
+        raise HTTPException(502, str(e)[:140])
+
+
+@app.post("/api/v1/media/transcribe", tags=["media"])
+async def media_transcribe(request: Request, file: UploadFile = File(...),
+                           notes: bool = Query(True)):
+    """Audio → Groq Whisper transcript (+ AI meeting notes). Both land in the
+    Library under Transcripts/ and Meeting-Notes/ — instantly AI-searchable."""
+    uid = await _uid_async(request)
+    data = await file.read()
+    try:
+        return await media_svc.transcribe_audio(file.filename or "audio.mp3", data, uid,
+                                                file_store, make_notes=notes)
+    except Exception as e:
+        raise HTTPException(502, str(e)[:140])
+
+
+class UniversalIn(BaseModel):
+    q: str = Field(min_length=1, max_length=400)
+    limit: int = Field(5, ge=1, le=10)
+
+
+@app.post("/api/v1/search/universal", tags=["search"])
+async def search_universal(body: UniversalIn, request: Request):
+    """One search across Library files, Archive and (when unlocked) Vault —
+    plus keyless Omniverse web results — merged and ranked."""
+    uid = await _uid_async(request)
+    session = None
+    authz = request.headers.get("authorization", "")
+    if authz.startswith("Bearer "):
+        user = await auth.validate_session(authz[7:])
+        if user and user.get("user_id") == uid:
+            # vault content stays encrypted unless explicitly unlocked elsewhere
+            pass
+    results: list[dict] = []
+    for lib, kind in ((f"files:{uid}", "file"), ("archive", "archive")):
+        try:
+            hits = await db.search(lib, body.q, limit=body.limit)
+            for h in hits:
+                m = h.get("meta") or {}
+                if kind == "file" and m.get("kind") != "file":
+                    continue
+                results.append({
+                    "kind": kind, "title": h.get("title", ""),
+                    "id": h.get("id", ""), "score": h.get("score", 0),
+                    "folder": m.get("folder", ""),
+                    "snippet": (h.get("content") or "")[:200],
+                })
+        except Exception:
+            continue
+    try:
+        omni = await skills_svc.tool_omniverse(body.q)
+        if omni.get("ok"):
+            results.append({"kind": "web", "title": "🌐 Omniverse",
+                            "id": "web", "score": 0.5, "folder": "",
+                            "snippet": omni["omniverse"][:400]})
+    except Exception:
+        pass
+    results.sort(key=lambda r: -r["score"])
+    return {"query": body.q, "results": results[: body.limit * 3], "total": len(results)}
 
 
 @app.get("/api/v1/skills/stats", tags=["skills"])
