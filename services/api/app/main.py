@@ -148,7 +148,8 @@ async def root():
 
 # ------------------------------------------------- Module 4: Archive Library --
 @app.post("/api/v1/archive/documents", tags=["archive"])
-async def archive_add(doc: DocIn):
+async def archive_add(doc: DocIn, request: Request):
+    await _require_user(request)
     import uuid
     doc_id = "a-" + uuid.uuid4().hex[:12]
     saved = await db.upsert_document(
@@ -194,7 +195,8 @@ async def archive_get(doc_id: str):
 
 
 @app.delete("/api/v1/archive/documents/{doc_id}", tags=["archive"])
-async def archive_delete(doc_id: str):
+async def archive_delete(doc_id: str, request: Request):
+    await _require_admin(request)
     doc = await db.fetch(doc_id)
     if not doc or doc["library"] != "archive":
         raise HTTPException(404, "archive document not found")
@@ -428,6 +430,7 @@ async def skills_stats(request: Request):
 
 @app.post("/api/v1/skills/auto-install", tags=["skills"])
 async def skills_auto_install(request: Request):
+    await _require_user(request)
     """Daily GitHub harvest: install a fresh batch of free AI skills from top repos."""
     await _uid_async(request)
     return await skills_svc.auto_install_skills()
@@ -505,6 +508,7 @@ async def crew_jobs_delete(job_id: str, request: Request):
 
 @app.post("/api/v1/crew/jobs/tick", tags=["crew"])
 async def crew_jobs_tick(request: Request):
+    await _require_admin(request)
     """Run every scheduled crew job that is due. Called daily by the platform
     cron (or manually); results are saved into each owner's Library under
     Crew-Reports/ so they show up in Ask too."""
@@ -566,6 +570,7 @@ def _re_sub(pat: str, rep: str, s: str) -> str:
 
 @app.post("/api/v1/digest/weekly/tick", tags=["user"])
 async def digest_weekly_tick(request: Request):
+    await _require_admin(request)
     """Weekly digest: for every account, summarize the week's new Library files
     and archive docs into a notification (email when the address is allowed).
     Triggered by the weekly cron."""
@@ -782,6 +787,16 @@ async def graph_stats():
 
 
 # ------------------------------------------- Modules 10-11: Admin/User panels ---
+async def _require_user(request: Request) -> None:
+    """Reject fully anonymous writes: any valid session (incl. admin) passes."""
+    authz = request.headers.get("authorization", "")
+    if authz.startswith("Bearer "):
+        user = await auth.validate_session(authz[7:])
+        if user and user.get("status") == "active":
+            return
+    raise HTTPException(401, "sign in required")
+
+
 async def _require_admin(request: Request) -> None:
     key = request.headers.get("x-admin-key", "")
     if key and hmac.compare_digest(key.encode(), settings.admin_key.encode()):
@@ -1038,7 +1053,18 @@ async def _notify(user_id: str, message: str) -> None:
 
 
 @app.get("/api/v1/notifications", tags=["user"])
-async def notifications(user_id: str = Query(...)):
+async def notifications(user_id: str = Query(...), request: Request = None):
+    # identity check: the caller must present the session for this user_id
+    if request is not None:
+        authz = request.headers.get("authorization", "")
+        if authz.startswith("Bearer "):
+            user = await auth.validate_session(authz[7:])
+            if user and user.get("user_id") == user_id:
+                pass
+            else:
+                raise HTTPException(403, "not your notification feed")
+        else:
+            raise HTTPException(401, "sign in required")
     rows, total = await db.list(f"notify:{user_id}", limit=30)
     return {"notifications": [
         {"id": r["id"], "message": r["title"], "ts": r.get("snippet", "")}
