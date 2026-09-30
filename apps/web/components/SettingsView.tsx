@@ -192,7 +192,7 @@ export function SettingsView({ user, authToken, onUserUpdate, lockOn, onToggleLo
         <div className="set-row">
           <div>
             <div className="set-t">{t("langLabel")}</div>
-            <div className="set-d">English · हिन्दी · नेपाली</div>
+            <div className="set-d">English · हिन्दी · नेपाली · Español · العربية · Français</div>
           </div>
           <select className="input" value={lang} onChange={(e) => setLang(e.target.value as Lang)} style={{ width: 140 }}>
             {LANGS.map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}

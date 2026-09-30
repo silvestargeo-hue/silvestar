@@ -38,6 +38,8 @@ export function AskView({ userId, sessionToken, authToken, chatFile, onClearChat
   const [lang, setLang] = useState("");
   const [folders, setFolders] = useState<string[]>([]);
   const [scope, setScope] = useState("");   // "" = all sources, else folder name
+  const [engine, setEngine] = useState<string>(() => { try { return localStorage.getItem("sv-engine") || ""; } catch { return ""; } });
+  const [followups, setFollowups] = useState<string[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const { listening, start, supported: sttSupported } = useSpeechInput((t) => {
     setQuestion(t);
@@ -58,9 +60,15 @@ export function AskView({ userId, sessionToken, authToken, chatFile, onClearChat
   const fileScope = chatFile?.path || "";
   const effectiveScope = fileScope ? "" : scope;
 
-  const ask = async () => {
-    const q = question.trim();
+  const pickEngine = (e: string) => {
+    setEngine(e);
+    try { localStorage.setItem("sv-engine", e); } catch {}
+  };
+
+  const ask = async (overrideQ?: string) => {
+    const q = (overrideQ ?? question).trim();
     if (!q || streaming) return;
+    setFollowups([]);
     setStreaming(true);
     setError("");
     setAnswer("");
@@ -72,7 +80,7 @@ export function AskView({ userId, sessionToken, authToken, chatFile, onClearChat
     try {
       for await (const ev of api.askStream(
         q, userId, sessionToken, history,
-        { lang: lang || undefined, folder: effectiveScope || undefined, file_path: fileScope || undefined },
+        { lang: lang || undefined, folder: effectiveScope || undefined, file_path: fileScope || undefined, engine: engine || undefined },
         ac.signal,
       )) {
         if (ev.type === "meta") {
@@ -96,9 +104,16 @@ export function AskView({ userId, sessionToken, authToken, chatFile, onClearChat
           throw new Error(ev.detail || "stream error");
         }
       }
-      setHistory((h) => [...h.slice(-6), { role: "user", content: q }, { role: "assistant", content: full }]);
+      const newHistory = [...history.slice(-6), { role: "user", content: q }, { role: "assistant", content: full }];
+      setHistory(newHistory);
       setQuestion("");
       if (tts && full) speak(full);
+      // suggest the next questions (best-effort)
+      try {
+        const fu = await api.askFollowups(q, userId, newHistory,
+          { folder: effectiveScope || undefined, file_path: fileScope || undefined });
+        setFollowups(fu.followups || []);
+      } catch { setFollowups([]); }
     } catch (e) {
       if (!ac.signal.aborted) setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -135,6 +150,15 @@ export function AskView({ userId, sessionToken, authToken, chatFile, onClearChat
               ))}
             </select>
           </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span className="hint" style={{ margin: 0 }}>{t("aiEngine")}</span>
+            <select value={engine} onChange={(e) => pickEngine(e.target.value)} aria-label={t("aiEngine")}>
+              <option value="">⚙ {t("aiEngineAuto")}</option>
+              <option value="groq">⚡ {t("aiEngineGroq")}</option>
+              <option value="pollinations">🌐 {t("aiEnginePollinations")}</option>
+              <option value="openrouter">🧭 {t("aiEngineOpenrouter")}</option>
+            </select>
+          </label>
           {!fileScope && folders.length > 0 && (
             <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <span className="hint" style={{ margin: 0 }}>{t("chatScope")}</span>
@@ -163,7 +187,7 @@ export function AskView({ userId, sessionToken, authToken, chatFile, onClearChat
           {streaming ? (
             <button onClick={stop} className="ghost">⏹ {t("stop")}</button>
           ) : (
-            <button onClick={ask}>{t("askBtn")}</button>
+            <button onClick={() => ask()}>{t("askBtn")}</button>
           )}
         </div>
         {error && <div className="hint" style={{ color: "var(--err)" }}>{error}</div>}
@@ -199,6 +223,16 @@ export function AskView({ userId, sessionToken, authToken, chatFile, onClearChat
                   [{c.i}] {c.library === "vault" ? "🔒" : c.library === "files" ? "📁" : "📚"} {c.title} · {c.score}
                 </span>
               ))}
+            </>
+          )}
+          {!streaming && followups.length > 0 && (
+            <>
+              <div className="hint" style={{ marginTop: 8 }}>{t("followups")}</div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {followups.map((f) => (
+                  <button key={f} className="mini" onClick={() => ask(f)}>❓ {f}</button>
+                ))}
+              </div>
             </>
           )}
         </div>

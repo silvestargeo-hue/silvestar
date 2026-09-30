@@ -255,7 +255,7 @@ class SilvestarAI:
 
     async def chat(self, question: str, user_id: str = "anon", vault_session_token: str = "",
                    history: list[dict] | None = None, lang: str = "", folder: str = "",
-                   file_path: str = "") -> dict:
+                   file_path: str = "", engine: str = "") -> dict:
         t0 = time.time()
         session = None
         if vault_session_token:
@@ -283,6 +283,12 @@ class SilvestarAI:
             ("pollinations-get", lambda: self._get_completion(question + context_suffix)),
             ("puter-proxy", lambda: self._puter_proxy(messages)),
         ]
+        if engine == "groq":
+            engines = [e for e in engines if e[0] == "groq"]
+        elif engine == "pollinations":
+            engines = [e for e in engines if e[0] in ("openai-compatible", "pollinations-get")]
+        elif engine == "openrouter":
+            engines = [e for e in engines if e[0] == "openrouter-free"]
         answer, engine = None, "local-extractive"
         for name, call in engines:
             answer = await call()
@@ -303,7 +309,7 @@ class SilvestarAI:
 
     async def stream_chat(self, question: str, user_id: str = "anon", vault_session_token: str = "",
                           history: list[dict] | None = None, lang: str = "", folder: str = "",
-                          file_path: str = ""):
+                          file_path: str = "", engine: str = ""):
         """Yield SSE dicts: {'type':'meta'|'delta'|'done'|'error', ...}. Always ends
         with a done event carrying the full answer text and citations."""
         t0 = time.time()
@@ -321,18 +327,44 @@ class SilvestarAI:
                    "vault_unlocked": bool(session and session.valid)}
 
             answer = ""
-            engine = "local-extractive"
-            async for delta in self._groq_stream(messages):
-                engine = "groq"
-                answer += delta
-                yield {"type": "delta", "text": delta}
-            if not answer:
+            used = "local-extractive"
+            if engine != "pollinations":
+                async for delta in self._groq_stream(messages):
+                    used = "groq"
+                    answer += delta
+                    yield {"type": "delta", "text": delta}
+            if not answer and engine in ("", "pollinations"):
                 async for delta in self._post_openai_stream(messages):
-                    engine = "openai-compatible"
+                    used = "openai-compatible"
                     answer += delta
                     yield {"type": "delta", "text": delta}
             if not answer:
-                # non-streaming fallback chain (groq/gemini/openrouter/etc.)
+                # non-streaming fallback for the chosen engine
+                if engine == "openrouter":
+                    fallback = await self._openrouter(messages)
+                    if fallback:
+                        used = "openrouter-free"
+                        answer = fallback
+                        yield {"type": "delta", "text": answer}
+                elif engine == "groq":
+                    fallback = await self._groq(messages)
+                    if fallback:
+                        used = "groq"
+                        answer = fallback
+                        yield {"type": "delta", "text": answer}
+            if not answer and engine == "":
+                # full auto chain (gemini, openrouter, pollinations, puter)
+                for name, call in [
+                    ("gemini", lambda: self._gemini(messages)),
+                    ("openrouter-free", lambda: self._openrouter(messages)),
+                ]:
+                    fallback = await call()
+                    if fallback:
+                        used = name
+                        answer = fallback
+                        yield {"type": "delta", "text": answer}
+                        break
+            if not answer and engine in ("", "pollinations"):
                 override_model = None
                 try:
                     from .cache import cache
@@ -341,13 +373,13 @@ class SilvestarAI:
                     pass
                 fallback = await self._post_openai(messages, override_model or settings.ai_model)
                 if fallback:
-                    engine = "openai-compatible"
+                    used = "openai-compatible"
                     answer = fallback
                     yield {"type": "delta", "text": answer}
             if not answer:
                 answer = self._local_extractive(question, context)
                 yield {"type": "delta", "text": answer}
-            yield {"type": "done", "answer": answer, "engine": engine,
+            yield {"type": "done", "answer": answer, "engine": used,
                    "citations": citations, "latency_ms": int((time.time() - t0) * 1000)}
         except Exception as e:
             yield {"type": "error", "detail": str(e)[:200]}

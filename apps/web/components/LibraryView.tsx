@@ -76,6 +76,10 @@ export function LibraryView({ userId, sessionToken, onChatWithFile }: {
   const [aiResults, setAiResults] = useState<{ title: string; path: string; folder: string; score: number; snippet: string }[]>([]);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiTried, setAiTried] = useState(false);
+  const [sumBusy, setSumBusy] = useState(false);
+  const [sumText, setSumText] = useState("");
+  const [sumFiles, setSumFiles] = useState(0);
+  const [suggested, setSuggested] = useState("");
   const [design, setDesign] = useState<{ accent: string; view: "grid" | "list" }>(
     () => { try { return JSON.parse(localStorage.getItem("sv-library-design") || '{"accent":"#8a05ff","view":"grid"}'); } catch { return { accent: "#8a05ff", view: "grid" as const }; } }
   );
@@ -186,6 +190,20 @@ export function LibraryView({ userId, sessionToken, onChatWithFile }: {
         (j.errors || []).forEach((e: { filename: string; error: string }) => toast(`${e.filename}: ${e.error}`, "err"));
       } else {
         toast(`Uploaded ${j.name}`, "ok");
+        // smart name: if the filename looks generic and the AI can read the file,
+        // fetch a descriptive suggestion and prefill the rename dialog
+        const generic = /^(untitled|document|new|file|scan|img|image|screenshot|download|doc\d*|\d{4}[-_]?\d{2}[-_]?\d{2}.*)$/i
+          .test((j.name || "").replace(/\.[^.]+$/, ""));
+        if (generic && j.indexed && j.path) {
+          try {
+            const s = await api.suggestName(j.path);
+            if (s.suggestion) {
+              setSuggested(s.suggestion);
+              setRenameTarget(j as FileMeta);
+              setRenameVal(s.suggestion + (j.name.match(/\.[^.]+$/)?.[0] || ""));
+            }
+          } catch {}
+        }
       }
       await load();
     } catch (e) {
@@ -370,6 +388,33 @@ export function LibraryView({ userId, sessionToken, onChatWithFile }: {
     onChatWithFile?.({ path: f.path, name: f.name });
   };
 
+  const runSummary = async () => {
+    if (sumBusy) return;
+    setSumBusy(true);
+    setSumText("");
+    try {
+      const r = await api.folderSummary(folder);
+      setSumText(r.summary || "");
+      setSumFiles(r.files || 0);
+      if (!r.summary) setSumText("");
+    } catch (e) {
+      toast(String(e instanceof Error ? e.message : e), "err");
+    } finally { setSumBusy(false); }
+  };
+
+  const aiSuggestName = async () => {
+    if (!renameTarget || !renameTarget.indexed) return;
+    try {
+      const s = await api.suggestName(renameTarget.path);
+      if (s.suggestion) {
+        setSuggested(s.suggestion);
+        setRenameVal(s.suggestion + (renameTarget.name.match(/\.[^.]+$/)?.[0] || ""));
+      } else toast("No suggestion — file may have no readable text", "err");
+    } catch (e) {
+      toast(String(e instanceof Error ? e.message : e), "err");
+    }
+  };
+
   // ------------------------------------------------------------- render ---
   const crumbs = folder ? folder.split("/") : [];
   const visible = query
@@ -391,6 +436,11 @@ export function LibraryView({ userId, sessionToken, onChatWithFile }: {
           <button className="btn ghost" onClick={() => setAiOpen(!aiOpen)} title={t("aiSearchHint")}>
             ✨ {t("aiSearch")}
           </button>
+          {data.total > 0 && (
+            <button className="btn ghost" disabled={sumBusy} onClick={runSummary} title={t("folderSummary")}>
+              {sumBusy ? "⏳" : t("summarizeBtn")}
+            </button>
+          )}
           <button className="btn ghost" onClick={() => saveDesign({ ...design, view: design.view === "grid" ? "list" : "grid" })}>
             {design.view === "grid" ? "☰ List" : "▦ Grid"}
           </button>
@@ -407,6 +457,19 @@ export function LibraryView({ userId, sessionToken, onChatWithFile }: {
       <input ref={bulkRef} type="file" multiple hidden onChange={(e) => { doUpload(e.target.files, true); e.target.value = ""; }} />
 
       {uploading && <div className="muted">Uploading…</div>}
+
+      {/* AI folder summary card */}
+      {(sumBusy || sumText) && (
+        <div className="card" style={{ marginBottom: 12 }}>
+          <b>✨ {t("folderSummary")} — {folder || "root"}</b>
+          {sumBusy ? <div className="muted">…</div> : (
+            <>
+              <div className="muted small">{sumFiles} file(s) analyzed</div>
+              <pre style={{ whiteSpace: "pre-wrap", margin: "6px 0 0" }}>{sumText}</pre>
+            </>
+          )}
+        </div>
+      )}
 
       {/* AI semantic search panel */}
       {aiOpen && (
@@ -613,11 +676,13 @@ export function LibraryView({ userId, sessionToken, onChatWithFile }: {
 
       {/* rename modal */}
       {renameTarget && (
-        <Modal title="Rename file" onClose={() => setRenameTarget(null)}>
+        <Modal title="Rename file" onClose={() => { setRenameTarget(null); setSuggested(""); }}>
           <input className="input" value={renameVal} onChange={(e) => setRenameVal(e.target.value)} autoFocus />
+          {suggested && <div className="muted small" style={{ marginTop: 4 }}>✨ AI: {suggested}</div>}
           <div className="row gap" style={{ marginTop: 12 }}>
             <button className="btn primary" disabled={busy} onClick={doRename}>Save</button>
-            <button className="btn ghost" onClick={() => setRenameTarget(null)}>Cancel</button>
+            {renameTarget.indexed && <button className="btn ghost" onClick={aiSuggestName}>{t("suggestNameBtn")}</button>}
+            <button className="btn ghost" onClick={() => { setRenameTarget(null); setSuggested(""); }}>Cancel</button>
           </div>
         </Modal>
       )}

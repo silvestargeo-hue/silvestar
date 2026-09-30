@@ -103,6 +103,7 @@ class AskIn(BaseModel):
     lang: str = ""     # reply language: en|hi|ne|es|ar|fr (empty = auto/English)
     folder: str = ""   # scope RAG to a Library folder (files:<uid> only)
     file_path: str = ""  # chat with ONE Library file (overrides folder)
+    engine: str = ""   # preferred engine: "" auto | groq | pollinations | openrouter
 
 
 class GraphNodeIn(BaseModel):
@@ -281,7 +282,44 @@ async def rag_query(body: AskIn):
 async def ask(body: AskIn, request: Request):
     uid = body.user_id or await _uid_async(request)
     return await ai.chat(body.question, uid, body.vault_session_token, body.history,
-                         lang=body.lang, folder=body.folder, file_path=body.file_path)
+                         lang=body.lang, folder=body.folder, file_path=body.file_path,
+                         engine=body.engine)
+
+
+@app.post("/api/v1/ask/followups", tags=["ai"])
+async def ask_followups(body: AskIn, request: Request):
+    """Suggest the next 3 questions based on the last answer + RAG context."""
+    uid = body.user_id or await _uid_async(request)
+    session = None
+    if body.vault_session_token:
+        session = await vault.validate(uid, body.vault_session_token)
+    last = ""
+    if body.history:
+        for m in reversed(body.history):
+            if m.get("role") == "assistant":
+                last = str(m.get("content", ""))[:800]
+                break
+    context, cited = await rag.build_context(body.question, uid, session, folder=body.folder)
+    import re as _re
+    topics = _re.findall(r"[A-Za-z][A-Za-z0-9_-]{3,}", body.question + " " + last)
+    topics = [t for t in dict.fromkeys(topics)][:6]
+    suggested = await ai.summarize(
+        "Suggest exactly 3 short follow-up questions (max 12 words each, no numbering) "
+        "that a user would naturally ask next in this conversation. "
+        "Return ONLY the 3 questions, one per line, nothing else.",
+        f"User asked: {body.question}\nAssistant answered: {last or '(no answer yet)'}\n"
+        f"Key topics: {', '.join(topics) or 'general'}\n"
+        + (f"Library context:\n{context[:2500]}" if context else ""),
+    )
+    qs = []
+    for line in (suggested.get("summary") or "").splitlines():
+        line = line.strip().lstrip("-•*").strip()
+        line = _re.sub(r"^\d+[.)]\s*", "", line)
+        if line and len(line) > 6:
+            qs.append(line[:140])
+        if len(qs) == 3:
+            break
+    return {"followups": qs}
 
 
 @app.post("/api/v1/ask/stream", tags=["ai"])
@@ -292,7 +330,7 @@ async def ask_stream(body: AskIn, request: Request):
     async def gen():
         async for ev in ai.stream_chat(body.question, uid, body.vault_session_token,
                                        body.history, lang=body.lang, folder=body.folder,
-                                       file_path=body.file_path):
+                                       file_path=body.file_path, engine=body.engine):
             yield f"data: {__import__('json').dumps(ev)}\n\n"
 
     from fastapi.responses import StreamingResponse
@@ -319,6 +357,58 @@ async def files_semantic_search(request: Request, q: str = Query(..., min_length
         if len(out) >= limit:
             break
     return {"query": q, "results": out, "total": len(out)}
+
+
+@app.get("/api/v1/files/folder-summary", tags=["files"])
+async def folder_summary(request: Request, folder: str = Query("")):
+    """AI digest of the text content of all indexed files in a folder."""
+    uid = await _uid_async(request)
+    corpus_parts: list[str] = []
+    count = 0
+    f = folder.strip("/")
+    hits = await db.search(f"files:{uid}", " ", limit=40)
+    for h in hits:
+        m = h.get("meta") or {}
+        if m.get("kind") != "file" or not h.get("content"):
+            continue
+        hf = (m.get("folder") or "").strip("/")
+        if f:
+            if not (hf == f or hf.startswith(f + "/")):
+                continue
+        corpus_parts.append(f"--- {h['title']}\n{(h.get('content') or '')[:4000]}")
+        count += 1
+        if count >= 10:
+            break
+    if not corpus_parts:
+        return {"folder": folder, "files": 0, "summary": "", "engine": "none"}
+    res = await ai.summarize(
+        f"Summarize the key points of these {count} document(s) from folder '{folder or 'root'}' "
+        "in 3-5 short bullets.",
+        "\n\n".join(corpus_parts)[:12000],
+    )
+    return {"folder": folder, "files": count, "summary": res.get("summary", ""), "engine": res.get("engine", "")}
+
+
+@app.post("/api/v1/files/suggest-name", tags=["files"])
+async def suggest_name(request: Request, path: str = Query(..., min_length=1, max_length=400)):
+    """AI-suggested descriptive filename based on the file's extracted text."""
+    uid = await _uid_async(request)
+    from .files import _fdoc_id
+    doc_id = "d-" + _fdoc_id(uid, path)[2:]
+    doc = await db.fetch(doc_id)
+    text = (doc or {}).get("content") or ""
+    if not text:
+        return {"suggestion": ""}
+    res = await ai.summarize(
+        "Propose a short descriptive filename (3-6 words, Title Case, no extension, no quotes) "
+        "for a document with this content. Return ONLY the filename.",
+        text[:4000],
+    )
+    import re as _re
+    s = (res.get("summary") or "").strip().splitlines()
+    name = s[0].strip().strip('"\'') if s else ""
+    name = _re.sub(r"[^A-Za-z0-9 -]", "", name).strip()[:60]
+    return {"suggestion": name}
 
 
 @app.get("/api/v1/ai/health", tags=["ai"])
