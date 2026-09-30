@@ -40,10 +40,16 @@ export function AskView({ userId, sessionToken, authToken, chatFile, onClearChat
   const [scope, setScope] = useState("");   // "" = all sources, else folder name
   const [engine, setEngine] = useState<string>(() => { try { return localStorage.getItem("sv-engine") || ""; } catch { return ""; } });
   const [followups, setFollowups] = useState<string[]>([]);
+  const [voiceMode, setVoiceMode] = useState(false); // hands-free: listen → answer → speak
   const abortRef = useRef<AbortController | null>(null);
-  const { listening, start, supported: sttSupported } = useSpeechInput((t) => {
+  const voiceModeRef = useRef(false);
+  voiceModeRef.current = voiceMode;
+  const { listening, start, stop, supported: sttSupported } = useSpeechInput((t) => {
     setQuestion(t);
+    // continuous mode: auto-submit the recognized question
+    if (voiceModeRef.current && t.trim()) setTimeout(() => askRef.current?.(t.trim()), 250);
   });
+  const askRef = useRef<((q?: string) => void | Promise<void>) | null>(null);
 
   // folder list for per-folder RAG scoping (same endpoint the Library uses)
   useEffect(() => {
@@ -107,7 +113,9 @@ export function AskView({ userId, sessionToken, authToken, chatFile, onClearChat
       const newHistory = [...history.slice(-6), { role: "user", content: q }, { role: "assistant", content: full }];
       setHistory(newHistory);
       setQuestion("");
-      if (tts && full) speak(full);
+      if ((tts || voiceModeRef.current) && full) speak(full);
+      // continuous voice mode: listen again after speaking the answer
+      if (voiceModeRef.current) setTimeout(() => { if (voiceModeRef.current) start(); }, 800);
       // suggest the next questions (best-effort)
       try {
         const fu = await api.askFollowups(q, userId, newHistory,
@@ -123,7 +131,15 @@ export function AskView({ userId, sessionToken, authToken, chatFile, onClearChat
     }
   };
 
-  const stop = () => abortRef.current?.abort();
+  const stopStream = () => abortRef.current?.abort();
+  askRef.current = ask;
+
+  const toggleVoiceMode = () => {
+    const next = !voiceMode;
+    setVoiceMode(next);
+    if (next) { setTts(true); start(); toast(t("voiceOn"), "ok"); }
+    else { stop(); speechSynthesis?.cancel(); }
+  };
 
   const citations: Cite[] = result?.citations || [];
 
@@ -184,8 +200,13 @@ export function AskView({ userId, sessionToken, authToken, chatFile, onClearChat
               {listening ? <span className="spin">🎙</span> : "🎙"}
             </button>
           )}
+          {sttSupported && (
+            <button className={voiceMode ? "primary" : "ghost"} onClick={toggleVoiceMode} title={t("voiceMode")}>
+              {voiceMode ? "🔴" : "🎧"} {t("voiceMode")}
+            </button>
+          )}
           {streaming ? (
-            <button onClick={stop} className="ghost">⏹ {t("stop")}</button>
+            <button onClick={stopStream} className="ghost">⏹ {t("stop")}</button>
           ) : (
             <button onClick={() => ask()}>{t("askBtn")}</button>
           )}

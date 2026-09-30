@@ -140,6 +140,9 @@ export const api = {
   suggestName: (path: string) =>
     req<{ suggestion: string }>(`/api/v1/files/suggest-name?path=${encodeURIComponent(path)}`),
 
+  importUrl: (url: string, folder = "") =>
+    req<Record<string, unknown>>(`/api/v1/files/import-url?url=${encodeURIComponent(url)}&folder=${encodeURIComponent(folder)}`, { method: "POST" }),
+
   fileSearch: (q: string) =>
     req<{ query: string; total: number; results: { id: string; title: string; path: string; folder: string; mime: string; score: number; snippet: string }[] }>(
       `/api/v1/files/search?q=${encodeURIComponent(q)}`

@@ -80,6 +80,9 @@ export function LibraryView({ userId, sessionToken, onChatWithFile }: {
   const [sumText, setSumText] = useState("");
   const [sumFiles, setSumFiles] = useState(0);
   const [suggested, setSuggested] = useState("");
+  const [urlOpen, setUrlOpen] = useState(false);
+  const [urlVal, setUrlVal] = useState("");
+  const [urlBusy, setUrlBusy] = useState(false);
   const [design, setDesign] = useState<{ accent: string; view: "grid" | "list" }>(
     () => { try { return JSON.parse(localStorage.getItem("sv-library-design") || '{"accent":"#8a05ff","view":"grid"}'); } catch { return { accent: "#8a05ff", view: "grid" as const }; } }
   );
@@ -402,6 +405,20 @@ export function LibraryView({ userId, sessionToken, onChatWithFile }: {
     } finally { setSumBusy(false); }
   };
 
+  const importFromUrl = async () => {
+    const u = urlVal.trim();
+    if (!u || urlBusy) return;
+    setUrlBusy(true);
+    try {
+      await api.importUrl(u, folder);
+      toast("Imported ✓", "ok");
+      setUrlOpen(false); setUrlVal("");
+      await load();
+    } catch (e) {
+      toast(`${t("importFailed")}: ${e instanceof Error ? e.message : e}`, "err");
+    } finally { setUrlBusy(false); }
+  };
+
   const aiSuggestName = async () => {
     if (!renameTarget || !renameTarget.indexed) return;
     try {
@@ -441,6 +458,7 @@ export function LibraryView({ userId, sessionToken, onChatWithFile }: {
               {sumBusy ? "⏳" : t("summarizeBtn")}
             </button>
           )}
+          <button className="btn ghost" onClick={() => setUrlOpen(!urlOpen)} title={t("fromUrlHint")}>🔗 {t("fromUrl")}</button>
           <button className="btn ghost" onClick={() => saveDesign({ ...design, view: design.view === "grid" ? "list" : "grid" })}>
             {design.view === "grid" ? "☰ List" : "▦ Grid"}
           </button>
@@ -457,6 +475,22 @@ export function LibraryView({ userId, sessionToken, onChatWithFile }: {
       <input ref={bulkRef} type="file" multiple hidden onChange={(e) => { doUpload(e.target.files, true); e.target.value = ""; }} />
 
       {uploading && <div className="muted">Uploading…</div>}
+
+      {/* import-from-URL panel */}
+      {urlOpen && (
+        <div className="card" style={{ marginBottom: 12 }}>
+          <b>🔗 {t("fromUrl")}</b>
+          <div className="hint">{t("fromUrlHint")}</div>
+          <div className="row">
+            <input value={urlVal} placeholder="https://example.com/report.pdf"
+              onChange={(e) => setUrlVal(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && importFromUrl()} />
+            <button onClick={importFromUrl} disabled={urlBusy || !urlVal.trim()}>
+              {urlBusy ? "⏳" : t("fromUrlBtn")}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* AI folder summary card */}
       {(sumBusy || sumText) && (

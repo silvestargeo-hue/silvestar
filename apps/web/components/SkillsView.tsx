@@ -57,6 +57,19 @@ export function SkillsView({ authToken, userId }: { authToken: string; userId: s
     } finally { setBusy(false); }
   };
 
+  const publish = async (s: Skill) => {
+    if (!confirm(`Publish "${s.name}" to the shared gallery? Every user's AI will be able to use it.`)) return;
+    try {
+      const r = await fetch(`${API}/api/v1/skills/${encodeURIComponent(s.id)}/publish`, {
+        method: "POST", headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.detail || `${r.status}`);
+      toast(t("published"), "ok");
+      await load();
+    } catch (e) { toast(String(e instanceof Error ? e.message : e), "err"); }
+  };
+
   const remove = async (s: Skill) => {
     if (!confirm(`Delete skill "${s.name}"?`)) return;
     try {
@@ -131,7 +144,10 @@ export function SkillsView({ authToken, userId }: { authToken: string; userId: s
           <div key={s.id} className="card" style={{ marginBottom: 8 }}>
             <div className="row" style={{ justifyContent: "space-between" }}>
               <b>{s.name}</b>
-              <button className="btn tiny danger" onClick={() => remove(s)}>🗑</button>
+              <span style={{ display: "flex", gap: 6 }}>
+                <button className="btn tiny ghost" onClick={() => publish(s)} title={t("publish")}>🌟</button>
+                <button className="btn tiny danger" onClick={() => remove(s)}>🗑</button>
+              </span>
             </div>
             <div className="muted small" style={{ whiteSpace: "pre-wrap" }}>{s.instructions}</div>
           </div>

@@ -390,6 +390,24 @@ async def skills_delete(skill_id: str, request: Request):
     return await skills_svc.delete_skill(uid, skill_id)
 
 
+@app.post("/api/v1/skills/{skill_id}/publish", tags=["skills"])
+async def skills_publish(skill_id: str, request: Request):
+    """Publish one of your personal skills to the shared gallery (everyone's AI gets it)."""
+    uid = await _uid_async(request)
+    doc = await db.fetch(skill_id)
+    if not doc or doc.get("library") != f"skills:{uid}":
+        raise HTTPException(404, "skill not found")
+    try:
+        rec = __import__("json").loads(doc.get("content") or "{}")
+    except Exception:
+        rec = {}
+    name = rec.get("name") or doc.get("title") or "skill"
+    instructions = rec.get("instructions") or ""
+    out = await skills_svc.add_skill(uid, name, instructions,
+                                     rec.get("triggers") or [], gallery=True)
+    return {"published": True, "gallery_id": out["id"], "name": name}
+
+
 @app.post("/api/v1/skills/auto-install", tags=["skills"])
 async def skills_auto_install(request: Request):
     """Daily GitHub harvest: install a fresh batch of free AI skills from top repos."""
@@ -407,6 +425,122 @@ async def crew_run(body: AskIn, request: Request):
     if body.vault_session_token:
         session = await vault.validate(uid, body.vault_session_token)
     return await run_crew(body.question, uid, lang=body.lang, vault_session=session)
+
+
+# ------------------------------------------------- scheduled crew jobs -------
+import hashlib as _hashlib
+
+
+def _job_id(uid: str, task: str) -> str:
+    return "cj-" + _hashlib.sha1((uid + "|" + task).encode()).hexdigest()[:14]
+
+
+@app.get("/api/v1/crew/jobs", tags=["crew"])
+async def crew_jobs_list(request: Request):
+    uid = await _uid_async(request)
+    hits = await db.search(f"crew-jobs:{uid}", " ", limit=50)
+    jobs = []
+    for h in hits:
+        if (h.get("meta") or {}).get("kind") != "crew-job":
+            continue
+        try:
+            rec = __import__("json").loads(h.get("content") or "{}")
+        except Exception:
+            continue
+        rec["id"] = h["id"]
+        jobs.append(rec)
+    return {"jobs": jobs, "total": len(jobs)}
+
+
+class CrewJobIn(BaseModel):
+    task: str = Field(min_length=4, max_length=2000)
+    lang: str = ""
+    interval_hours: int = Field(24, ge=1, le=168)
+
+
+@app.post("/api/v1/crew/jobs", tags=["crew"])
+async def crew_jobs_create(body: CrewJobIn, request: Request):
+    uid = await _uid_async(request)
+    import json as _j
+    import time as _t
+    rec = {"task": body.task, "lang": body.lang, "interval_hours": body.interval_hours,
+           "created": int(_t.time()), "last_run": 0, "runs": 0}
+    jid = _job_id(uid, body.task)
+    await db.upsert_document(jid, f"crew-jobs:{uid}", body.task[:80],
+                             _j.dumps(rec), meta={"kind": "crew-job"})
+    # register this owner's job library so the daily tick can discover it
+    reg_id = "creg-" + _hashlib.sha1(uid.encode()).hexdigest()[:12]
+    await db.upsert_document(reg_id, "crew-jobs-registry", uid,
+                             f"crew-jobs:{uid}", meta={"kind": "crew-jobs-lib"})
+    return {"id": jid, **rec}
+
+
+@app.delete("/api/v1/crew/jobs/{job_id}", tags=["crew"])
+async def crew_jobs_delete(job_id: str, request: Request):
+    uid = await _uid_async(request)
+    doc = await db.fetch(job_id)
+    if not doc or doc.get("library") != f"crew-jobs:{uid}":
+        raise HTTPException(404, "job not found")
+    await db.delete(job_id)
+    return {"deleted": True}
+
+
+@app.post("/api/v1/crew/jobs/tick", tags=["crew"])
+async def crew_jobs_tick(request: Request):
+    """Run every scheduled crew job that is due. Called daily by the platform
+    cron (or manually); results are saved into each owner's Library under
+    Crew-Reports/ so they show up in Ask too."""
+    import json as _j
+    import time as _t
+    now = int(_t.time())
+    ran, skipped = [], 0
+    docs, _total = await db.list("crew-jobs", limit=1, offset=0)  # presence probe
+    # iterate per-user job libraries via the gallery-style registry
+    reg, _r = await db.list("crew-jobs-registry", limit=200, offset=0)
+    owner_libs = []
+    for d in reg:
+        lib = (d.get("snippet") or "").strip()
+        if lib.startswith("crew-jobs:"):
+            owner_libs.append(lib)
+    if not owner_libs:
+        # fall back: scan known job ids from registry doc content
+        pass
+    for lib in owner_libs:
+        hits = await db.search(lib, " ", limit=50)
+        for h in hits:
+            if (h.get("meta") or {}).get("kind") != "crew-job":
+                continue
+            full = await db.fetch(h["id"])
+            try:
+                rec = _j.loads((full or {}).get("content") or "{}")
+            except Exception:
+                continue
+            due = now - int(rec.get("last_run") or 0) >= int(rec.get("interval_hours", 24)) * 3600
+            if not due:
+                skipped += 1
+                continue
+            owner = lib.split(":", 1)[1]
+            try:
+                result = await run_crew(rec["task"], owner, lang=rec.get("lang", ""))
+                # save the deliverable into the owner's Library (RAG-indexed)
+                safe = _re_sub(r"[^A-Za-z0-9]+", "-", rec["task"][:40]).strip("-") or "report"
+                fname = f"crew-{safe}-{_t.strftime('%Y%m%d', _t.gmtime(now))}.md"
+                report = (f"# Crew report — {rec['task']}\n\n{result['final']}\n\n"
+                          f"---\nPlan:\n{result['plan']}\n")
+                await file_store.upload(owner, fname, report.encode(), folder="Crew-Reports")
+                rec["last_run"] = now
+                rec["runs"] = int(rec.get("runs", 0)) + 1
+                await db.upsert_document(h["id"], lib, rec["task"][:80], _j.dumps(rec),
+                                         meta={"kind": "crew-job"})
+                ran.append({"job": h["id"], "owner": owner, "file": fname})
+            except Exception as e:
+                ran.append({"job": h["id"], "owner": owner, "error": str(e)[:120]})
+    return {"ran": ran, "skipped": skipped, "count": len(ran)}
+
+
+def _re_sub(pat: str, rep: str, s: str) -> str:
+    import re as _re
+    return _re.sub(pat, rep, s)
 
 
 @app.get("/api/v1/files/folder-summary", tags=["files"])
@@ -437,6 +571,32 @@ async def folder_summary(request: Request, folder: str = Query("")):
         "\n\n".join(corpus_parts)[:12000],
     )
     return {"folder": folder, "files": count, "summary": res.get("summary", ""), "engine": res.get("engine", "")}
+
+
+@app.post("/api/v1/files/import-url", tags=["files"])
+async def import_url(request: Request, url: str = Query(..., min_length=8, max_length=1000),
+                     folder: str = Query("")):
+    """Download a file from any public URL into the user's Library (RAG-indexed)."""
+    uid = await _uid_async(request)
+    import httpx as _hx
+    from urllib.parse import urlparse as _p
+    try:
+        async with _hx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            r = await client.get(url)
+        if r.status_code != 200:
+            raise HTTPException(502, f"source returned HTTP {r.status_code}")
+        data = r.content
+        if len(data) > 40 * 1024 * 1024:
+            raise HTTPException(413, "file too large (40MB limit)")
+        name = [s for s in _p(url).path.split("/") if s][-1] if _p(url).path.strip("/") else "imported"
+        if len(name) > 120:
+            name = name[:120]
+        rec = await file_store.upload(uid, name, data, folder=folder)
+        return rec
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"download failed: {str(e)[:140]}")
 
 
 @app.post("/api/v1/files/suggest-name", tags=["files"])

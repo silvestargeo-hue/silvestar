@@ -2,7 +2,7 @@
 
 /** Crew — multi-agent cowork: manager → researcher → writer → reviewer.
  *  Free, runs on the platform's own AI chain. */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { copyText, toast, useSpeechInput } from "@/lib/kit";
 import { useI18n } from "@/lib/i18n";
 
@@ -15,13 +15,48 @@ type CrewResult = {
   latency_ms: number;
 };
 
+type Job = { id: string; task: string; interval_hours: number; runs: number; last_run: number };
+
 export function CrewView({ userId, sessionToken }: { userId: string; sessionToken: string }) {
   const { t } = useI18n();
   const [task, setTask] = useState("");
   const [busy, setBusy] = useState(false);
   const [res, setRes] = useState<CrewResult | null>(null);
   const [err, setErr] = useState("");
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [jobSaved, setJobSaved] = useState(false);
   const { listening, start, supported: sttSupported } = useSpeechInput((v) => setTask(v));
+
+  const loadJobs = () => {
+    fetch(`${API}/api/v1/crew/jobs`)
+      .then((r) => (r.ok ? r.json() : { jobs: [] }))
+      .then((d) => setJobs(d.jobs || []))
+      .catch(() => setJobs([]));
+  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(loadJobs, []);
+
+  const scheduleJob = async () => {
+    const q = task.trim();
+    if (!q) return;
+    try {
+      const r = await fetch(`${API}/api/v1/crew/jobs`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ task: q, interval_hours: 24 }),
+      });
+      if (!r.ok) throw new Error(`${r.status}`);
+      setJobSaved(true);
+      toast(t("jobAdded"), "ok");
+      loadJobs();
+    } catch (e) { toast(String(e instanceof Error ? e.message : e), "err"); }
+  };
+
+  const deleteJob = async (id: string) => {
+    try {
+      await fetch(`${API}/api/v1/crew/jobs/${encodeURIComponent(id)}`, { method: "DELETE" });
+      loadJobs();
+    } catch {}
+  };
 
   const run = async () => {
     const q = task.trim();
@@ -72,8 +107,28 @@ export function CrewView({ userId, sessionToken }: { userId: string; sessionToke
           <button onClick={run} disabled={busy || !task.trim()}>
             {busy ? "⏳ " + t("crewRunning") : "▶ " + t("crewRun")}
           </button>
+          <button className="ghost" onClick={scheduleJob} disabled={!task.trim()} title={t("jobAdded")}>
+            🗓 {t("addJob")}
+          </button>
         </div>
         {err && <div className="hint" style={{ color: "var(--err)" }}>{err}</div>}
+      </div>
+
+      {/* scheduled jobs */}
+      <div className="card">
+        <b>🗓 {t("jobs")} ({jobs.length})</b>
+        {jobSaved && <div className="hint">{t("jobAdded")}</div>}
+        {jobs.length === 0 ? (
+          <div className="muted small">—</div>
+        ) : jobs.map((j) => (
+          <div key={j.id} className="row" style={{ justifyContent: "space-between", marginTop: 6 }}>
+            <span>
+              <b>{j.task.slice(0, 60)}{j.task.length > 60 ? "…" : ""}</b>
+              <span className="muted small"> · {t("jobDueIn")}: {j.interval_hours}h · runs: {j.runs}</span>
+            </span>
+            <button className="btn tiny danger" onClick={() => deleteJob(j.id)}>🗑</button>
+          </div>
+        ))}
       </div>
 
       {res && (

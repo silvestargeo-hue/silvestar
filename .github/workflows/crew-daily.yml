@@ -1,0 +1,25 @@
+name: Daily crew jobs tick
+
+# Runs every scheduled Silvestar crew job that is due: plan → research →
+# write → review, and saves each deliverable into the owner's Library
+# (Crew-Reports/) where Ask can cite it. Free, on the platform AI chain.
+
+on:
+  schedule:
+    - cron: "30 4 * * *"   # daily 04:30 UTC (after the skill harvest)
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger crew jobs tick
+        run: |
+          code=$(curl -s -o /tmp/crew.json -w "%{http_code}" -X POST \
+            https://silvestar-api.vercel.app/api/v1/crew/jobs/tick \
+            -H "Content-Type: application/json" --max-time 600)
+          echo "HTTP $code"; head -c 500 /tmp/crew.json; echo
+          test "$code" = "200"
