@@ -12,6 +12,7 @@ import { LibraryView } from "@/components/LibraryView";
 import { SkillsView } from "@/components/SkillsView";
 import { CrewView } from "@/components/CrewView";
 import { StudioView } from "@/components/StudioView";
+import { StudyView } from "@/components/StudyView";
 import { UniversalSearch } from "@/components/UniversalSearch";
 import { SettingsView } from "@/components/SettingsView";
 import { GuideView } from "@/components/GuideView";
@@ -27,7 +28,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useOnline, useTheme, toast } from "@/lib/kit";
 import "./lock.css";
 
-type Tab = "panel" | "ask" | "library" | "archive" | "vault" | "rooms" | "graph" | "skills" | "crew" | "studio" | "settings" | "guide" | "admin";
+type Tab = "panel" | "ask" | "library" | "archive" | "vault" | "rooms" | "graph" | "skills" | "crew" | "studio" | "study" | "settings" | "guide" | "admin";
 
 const TABS: NavTab[] = [
   { id: "panel", label: "Home", icon: "🏠", group: "Workspace" },
@@ -38,6 +39,7 @@ const TABS: NavTab[] = [
   { id: "vault", label: "Vault", icon: "🔒", group: "Knowledge" },
   { id: "graph", label: "Graph", icon: "🕸", group: "Knowledge" },
   { id: "studio", label: "Studio", icon: "🎨", group: "Workspace" },
+  { id: "study", label: "Study", icon: "🃏", group: "Knowledge" },
   { id: "skills", label: "Skills", icon: "🧩", group: "System" },
   { id: "rooms", label: "Rooms", icon: "🎙", group: "System" },
   { id: "settings", label: "Settings", icon: "⚙️", group: "System" },
@@ -83,7 +85,7 @@ export default function Home() {
   useEffect(() => {
     const sp = new URLSearchParams(window.location.search);
     const t = sp.get("tab") as Tab | null;
-    if (t && ["panel", "ask", "library", "archive", "vault", "rooms", "graph", "skills", "crew", "studio", "settings", "guide", "admin"].includes(t)) {
+    if (t && ["panel", "ask", "library", "archive", "vault", "rooms", "graph", "skills", "crew", "studio", "study", "settings", "guide", "admin"].includes(t)) {
       setTab(t);
     }
     // web clipper deep link: /?import=<text>&title=…&url=… (bookmarklet / mobile share)
@@ -294,6 +296,11 @@ export default function Home() {
         {tab === "studio" && (
           <ErrorBoundary>
             <StudioView authToken={authToken} userId={user.user_id} />
+          </ErrorBoundary>
+        )}
+        {tab === "study" && (
+          <ErrorBoundary>
+            <StudyView authToken={authToken} userId={user.user_id} />
           </ErrorBoundary>
         )}
         {tab === "rooms" && <ErrorBoundary><RoomsView userId={user.user_id} /></ErrorBoundary>}

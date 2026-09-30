@@ -33,6 +33,8 @@ from .core.file_routes import router as files_router, _uid_async
 from .core import skills as skills_svc
 from .core.crew import run_crew
 from .core import media as media_svc
+from .core import study as study_svc
+from .core import spaces as spaces_svc
 from .core.graph import graph
 from .core.realtime import Client, hub, livekit
 from .core.vault import VaultError, vault
@@ -489,6 +491,138 @@ async def search_universal(body: UniversalIn, request: Request):
         pass
     results.sort(key=lambda r: -r["score"])
     return {"query": body.q, "results": results[: body.limit * 3], "total": len(results)}
+
+
+# ------------------------------------------------- Module 17: Study Mode ----
+@app.post("/api/v1/study/generate", tags=["study"])
+async def study_generate(request: Request, title: str = Query(..., min_length=1, max_length=80),
+                         source: str = Query(""), count: int = Query(10, ge=3, le=25),
+                         body: dict = None):
+    """Generate a flashcard deck from a Library file (source=path), pasted
+    JSON body {text}, or a share of both."""
+    uid = await _uid_async(request)
+    text = ""
+    if body and isinstance(body, dict):
+        text = str(body.get("text") or "")[:12000]
+    if not text and source:
+        from .files import _fdoc_id
+        doc = await db.fetch("d-" + _fdoc_id(uid, source)[2:])
+        text = (doc or {}).get("content") or ""
+    if not text:
+        raise HTTPException(422, "no source text (upload an indexed file or paste text)")
+    return await study_svc.generate_deck(uid, title, text, count)
+
+
+@app.get("/api/v1/study/decks", tags=["study"])
+async def study_decks(request: Request):
+    uid = await _uid_async(request)
+    return await study_svc.list_decks(uid)
+
+
+@app.get("/api/v1/study/due", tags=["study"])
+async def study_due(request: Request, deck: str = Query(...)):
+    uid = await _uid_async(request)
+    return await study_svc.get_due(uid, deck)
+
+
+@app.post("/api/v1/study/review", tags=["study"])
+async def study_review(request: Request, card_id: str = Query(...), grade: int = Query(..., ge=0, le=3)):
+    uid = await _uid_async(request)
+    return await study_svc.review(uid, card_id, grade)
+
+
+@app.delete("/api/v1/study/decks/{deck}", tags=["study"])
+async def study_deck_delete(deck: str, request: Request):
+    uid = await _uid_async(request)
+    return await study_svc.delete_deck(uid, deck)
+
+
+# -------------------------------------------------- Module 18: Spaces -------
+class SpaceIn(BaseModel):
+    name: str = Field(min_length=2, max_length=40)
+    email: str = ""
+
+
+@app.post("/api/v1/spaces", tags=["spaces"])
+async def space_create(body: SpaceIn, request: Request):
+    uid = await _uid_async(request)
+    user = await auth.validate_session(request.headers.get("authorization", "")[7:]) \
+        if request.headers.get("authorization", "").startswith("Bearer ") else None
+    email = (user or {}).get("email", "")
+    if not email:
+        raise HTTPException(401, "sign in required")
+    return await spaces_svc.create_space(uid, email, body.name)
+
+
+@app.get("/api/v1/spaces", tags=["spaces"])
+async def spaces_list(request: Request):
+    uid = await _uid_async(request)
+    authz = request.headers.get("authorization", "")
+    user = await auth.validate_session(authz[7:]) if authz.startswith("Bearer ") else None
+    email = (user or {}).get("email", "")
+    return await spaces_svc.my_spaces(uid, email)
+
+
+@app.post("/api/v1/spaces/{name}/invite", tags=["spaces"])
+async def space_invite(name: str, body: SpaceIn, request: Request):
+    uid = await _uid_async(request)
+    return await spaces_svc.invite(name, body.email, uid)
+
+
+@app.post("/api/v1/spaces/{name}/remove", tags=["spaces"])
+async def space_remove(name: str, body: SpaceIn, request: Request):
+    uid = await _uid_async(request)
+    return await spaces_svc.remove_member(name, body.email, uid)
+
+
+# ------------------------------------------ Module 16b: CSV data chat -------
+class DataChatIn(BaseModel):
+    q: str = Field(min_length=1, max_length=500)
+    csv: str = Field(min_length=1, max_length=200_000)
+
+
+@app.post("/api/v1/studio/data-chat", tags=["media"])
+async def studio_data_chat(body: DataChatIn, request: Request):
+    """Chat with a CSV: computes aggregates locally and answers with numbers."""
+    uid = await _uid_async(request)
+    import csv as _csv
+    import io as _io
+    try:
+        _csv.field_size_limit(10 * 1024 * 1024)
+    except Exception:
+        pass
+    rows = list(_csv.DictReader(_io.StringIO(body.csv)))
+    if not rows:
+        raise HTTPException(422, "empty CSV")
+    cols = list(rows[0].keys())
+    # numeric column profiles
+    profiles = {}
+    for c in cols:
+        vals = []
+        for r in rows[:2000]:
+            try:
+                vals.append(float(str(r.get(c, "")).replace(",", "")))
+            except Exception:
+                pass
+        if len(vals) >= 3:
+            profiles[c] = {"min": min(vals), "max": max(vals),
+                           "sum": round(sum(vals), 4), "avg": round(sum(vals) / len(vals), 4),
+                           "n": len(vals)}
+    sample = "\n".join(", ".join(f"{k}={r.get(k, '')}" for k in cols[:6]) for r in rows[:15])
+    res = await ai.chat(
+        body.q, uid, "", None,
+        use_skills=False,
+    )
+    # override context with the computed profile for exactness
+    ctx = (f"CSV columns: {cols}\nRows: {len(rows)}\n"
+           f"Numeric profiles: {profiles}\nSample rows:\n{sample}")
+    res2 = await ai.summarize(
+        "Answer the user's question about this CSV using ONLY the computed numbers. "
+        "Be concise; mention exact figures.",
+        f"QUESTION: {body.q}\n\n{ctx[:12000]}",
+    )
+    return {"answer": res2.get("summary") or res.get("answer", ""),
+            "columns": cols, "rows": len(rows), "numeric": list(profiles.keys())}
 
 
 @app.get("/api/v1/skills/stats", tags=["skills"])
