@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "Silvestar Web Clipper",
+  "version": "1.0.0",
+  "description": "Clip any webpage straight into your Silvestar Library — one click, fully AI-searchable.",
+  "permissions": ["storage", "activeTab", "scripting"],
+  "host_permissions": ["<all_urls>"],
+  "action": {
+    "default_title": "Clip to Silvestar",
+    "default_popup": "popup.html"
+  }
+}

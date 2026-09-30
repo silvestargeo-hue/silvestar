@@ -1,0 +1,24 @@
+name: Weekly user digest
+
+# Every Monday the platform summarizes each user's new Library content into
+# an in-app notification (and an email when the address is allowed). Free.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"   # Mondays 06:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger weekly digest
+        run: |
+          code=$(curl -s -o /tmp/dig.json -w "%{http_code}" -X POST \
+            https://silvestar-api.vercel.app/api/v1/digest/weekly/tick \
+            -H "Content-Type: application/json" --max-time 600)
+          echo "HTTP $code"; head -c 500 /tmp/dig.json; echo
+          test "$code" = "200"

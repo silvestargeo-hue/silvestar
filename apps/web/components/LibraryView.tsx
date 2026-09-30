@@ -108,6 +108,27 @@ export function LibraryView({ userId, sessionToken, onChatWithFile }: {
 
   useEffect(() => { load(); setSelected(new Set()); }, [load]);
 
+  // web-clipper handoff: /?import=… deep link stashes a payload in localStorage
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("sv-import");
+      if (!raw) return;
+      localStorage.removeItem("sv-import");
+      const p = JSON.parse(raw) as { title?: string; text?: string; url?: string };
+      if (!p?.text) return;
+      const safe = (p.title || "Web clip").slice(0, 60).replace(/[\\/:*?"<>|]/g, "-");
+      const body = `# ${p.title || "Web clip"}\nSource: ${p.url || ""}\n\n${p.text}`;
+      const fd = new FormData();
+      fd.append("file", new Blob([body], { type: "text/markdown" }), `${safe}.md`);
+      fd.append("folder", "clippings");
+      fetch(`${API}/api/v1/files/upload`, { method: "POST", headers: authHeaders(sessionToken, userId), body: fd })
+        .then((r) => { if (!r.ok) throw new Error("import failed"); toast("Clip saved to Library ✓", "ok"); })
+        .then(() => load())
+        .catch(() => toast("Clip import failed", "err"));
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ------------------------------------------------------- bulk selection --
   const toggleSel = (path: string) => {
     setSelected((prev) => {
@@ -475,6 +496,23 @@ export function LibraryView({ userId, sessionToken, onChatWithFile }: {
       <input ref={bulkRef} type="file" multiple hidden onChange={(e) => { doUpload(e.target.files, true); e.target.value = ""; }} />
 
       {uploading && <div className="muted">Uploading…</div>}
+
+      {/* web clipper helper */}
+      <details className="card" style={{ marginBottom: 12 }}>
+        <summary style={{ cursor: "pointer" }}>✂️ Web clipper — save any page into this Library</summary>
+        <div className="hint" style={{ marginTop: 6 }}>
+          1) Drag this button to your bookmarks bar:
+          <a
+            href={`javascript:(function(){var s=window.getSelection()+'';if(!s){var c=document.cloneNode(true);c.querySelectorAll('script,style,nav,footer,header,aside').forEach(function(n){n.remove()});s=(c.body.innerText||'').replace(/\\s+/g,' ').trim()}location.href='${(typeof window!=="undefined"?window.location.origin:"")}/?import='+encodeURIComponent(s.slice(0,40000))+'&title='+encodeURIComponent(document.title)+'&url='+encodeURIComponent(location.href)})()`}
+            onClick={(e) => e.preventDefault()}
+            style={{ margin: "0 6px", fontWeight: 700 }}
+          >
+            ✂️ Clip to Silvestar
+          </a>
+          2) On any page, click the bookmark — the page text lands in Library/clippings, AI-searchable.
+          3) Prefer an extension? Load the MV3 clipper from the repo's <code>extension/</code> folder.
+        </div>
+      </details>
 
       {/* import-from-URL panel */}
       {urlOpen && (

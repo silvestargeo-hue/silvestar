@@ -1,0 +1,35 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    body { font-family: system-ui, sans-serif; width: 300px; padding: 12px; background: #14101f; color: #eee; }
+    h1 { font-size: 15px; margin: 0 0 8px; color: #b98cff; }
+    input, textarea { width: 100%; box-sizing: border-box; padding: 7px; border-radius: 8px; border: 1px solid #444; background: #1e1830; color: #eee; margin-bottom: 8px; font-size: 12px; }
+    textarea { min-height: 110px; resize: vertical; }
+    button { width: 100%; padding: 9px; border: 0; border-radius: 8px; background: #8a05ff; color: #fff; font-weight: 600; cursor: pointer; }
+    button.sec { background: #2a2340; margin-bottom: 8px; }
+    .ok { color: #7ee787; font-size: 12px; margin-top: 6px; }
+    .err { color: #ff7b72; font-size: 12px; margin-top: 6px; }
+    label { font-size: 11px; color: #999; display: block; margin-bottom: 3px; }
+  </style>
+</head>
+<body>
+  <h1>🟣 Clip to Silvestar</h1>
+  <input id="title" placeholder="Title" />
+  <input id="url" placeholder="Page URL" />
+  <label>Extracted text</label>
+  <textarea id="text"></textarea>
+  <input id="folder" placeholder="Library folder (e.g. clippings)" value="clippings" />
+  <details style="margin-bottom:8px">
+    <summary style="font-size:11px;color:#999;cursor:pointer">Settings</summary>
+    <label>API URL</label>
+    <input id="api" placeholder="https://silvestar-api.vercel.app" />
+    <label>Session token (sv-session)</label>
+    <input id="token" placeholder="paste your sv-session value" />
+  </details>
+  <button id="clip">⬆ Clip into Library</button>
+  <div id="msg"></div>
+  <script src="popup.js"></script>
+</body>
+</html>

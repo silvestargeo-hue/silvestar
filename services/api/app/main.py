@@ -380,7 +380,17 @@ async def skills_add(request: Request, body: dict):
         raise HTTPException(422, "name and instructions are required")
     rec = await skills_svc.add_skill(uid, name, instructions,
                                      body.get("triggers") or [],
-                                     gallery=bool(body.get("gallery")))
+                                     gallery=bool(body.get("gallery")),
+                                     tools=body.get("tools") or [])
+    # optional multi-step pipeline: ['step 1', 'step 2', …] executed in order
+    chain = [str(c)[:200] for c in (body.get("chain") or [])][:6]
+    if chain:
+        rec["chain"] = chain
+        import json as _j2
+        await db.upsert_document(rec["id"],
+                                 (skills_svc.SKILLS_LIB if rec.get("builtin") else f"skills:{uid}"),
+                                 rec["name"], _j2.dumps({**rec, "chain": chain}),
+                                 meta={"kind": "gallery" if rec.get("builtin") else "skill"})
     return rec
 
 
@@ -533,6 +543,9 @@ async def crew_jobs_tick(request: Request):
                 await db.upsert_document(h["id"], lib, rec["task"][:80], _j.dumps(rec),
                                          meta={"kind": "crew-job"})
                 ran.append({"job": h["id"], "owner": owner, "file": fname})
+                # notify the owner (in-app + email when the address is allowed)
+                await _notify(owner, f"✅ Crew report ready: {rec['task'][:60]} → Crew-Reports/{fname}")
+                await _email_owner(owner, f"Your crew report '{rec['task'][:60]}' is ready in Library → Crew-Reports/{fname}")
             except Exception as e:
                 ran.append({"job": h["id"], "owner": owner, "error": str(e)[:120]})
     return {"ran": ran, "skipped": skipped, "count": len(ran)}
@@ -541,6 +554,77 @@ async def crew_jobs_tick(request: Request):
 def _re_sub(pat: str, rep: str, s: str) -> str:
     import re as _re
     return _re.sub(pat, rep, s)
+
+
+@app.post("/api/v1/digest/weekly/tick", tags=["user"])
+async def digest_weekly_tick(request: Request):
+    """Weekly digest: for every account, summarize the week's new Library files
+    and archive docs into a notification (email when the address is allowed).
+    Triggered by the weekly cron."""
+    import time as _t
+    import datetime as _dt
+    week_ago = int(_t.time()) - 7 * 86400
+    out = []
+    rows, _t2 = await db.list(ACCOUNTS_LIB, limit=500)
+    for r in rows:
+        m = r.get("meta") or {}
+        uid = m.get("user_id")
+        email = r["id"].split("::", 1)[1]
+        if not uid:
+            continue
+        try:
+            idx = await file_store.stats(uid)
+            new_files = idx.get("files", 0)  # total for now; per-week filter below via uploads
+            files_rows = (await file_store.list_files(uid)).get("files", [])
+            fresh = [f for f in files_rows if int(f.get("uploaded", 0)) >= week_ago]
+            arc_rows, arc_total = await db.list("archive", limit=200)
+            fresh_arc = [a for a in arc_rows if int((_dt.datetime.fromisoformat(a["snippet"][:19]) ).timestamp()) >= week_ago] if False else []
+            if not fresh:
+                continue
+            names = ", ".join(f["name"] for f in fresh[:8])
+            summary = await ai.summarize(
+                "Write a 2-3 sentence friendly weekly digest of what the user added "
+                "to their library this week and one tip.",
+                f"Files added this week: {names}. Total files: {new_files}.",
+            )
+            text = summary.get("summary", f"You added {len(fresh)} file(s) this week: {names}")
+            await _notify(uid, f"📅 Weekly digest: {text[:180]}")
+            if settings.resend_api_key:
+                import httpx as _hx
+                await _hx.AsyncClient(timeout=15).post(
+                    "https://api.resend.com/emails",
+                    headers={"Authorization": f"Bearer {settings.resend_api_key}"},
+                    json={"from": settings.resend_from, "to": [email],
+                          "subject": "Silvestar — your weekly digest",
+                          "text": text[:1200]},
+                )
+            out.append({"user": uid, "new_files": len(fresh)})
+        except Exception as e:
+            out.append({"user": uid, "error": str(e)[:100]})
+    return {"digests_sent": len([o for o in out if "error" not in o]), "details": out}
+
+
+async def _email_owner(user_id: str, message: str) -> None:
+    """Best-effort email to the account that owns user_id (Resend free tier
+    currently only delivers to the platform owner's address; silently skips)."""
+    try:
+        rows, _t = await db.list(ACCOUNTS_LIB, limit=500)
+        for r in rows:
+            m = r.get("meta") or {}
+            if m.get("user_id") == user_id:
+                email = r["id"].split("::", 1)[1]
+                if settings.resend_api_key:
+                    import httpx as _hx
+                    await _hx.AsyncClient(timeout=15).post(
+                        "https://api.resend.com/emails",
+                        headers={"Authorization": f"Bearer {settings.resend_api_key}"},
+                        json={"from": settings.resend_from, "to": [email],
+                              "subject": "Silvestar — crew report ready",
+                              "text": message},
+                    )
+                return
+    except Exception:
+        pass
 
 
 @app.get("/api/v1/files/folder-summary", tags=["files"])

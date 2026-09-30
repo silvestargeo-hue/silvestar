@@ -100,11 +100,13 @@ def parse_skill(text: str, *, user_id: str = "", builtin: bool = False) -> dict 
 
 
 async def add_skill(user_id: str, name: str, instructions: str,
-                    triggers: list[str] | None = None, gallery: bool = False) -> dict:
+                    triggers: list[str] | None = None, gallery: bool = False,
+                    tools: list[str] | None = None) -> dict:
     rec = {
         "name": (name or "skill")[:60],
         "instructions": (instructions or "")[:4000],
         "triggers": [t.lower() for t in (triggers or [])][:20],
+        "tools": [t for t in (tools or []) if t in ("omniverse", "read_url", "math", "datetime")][:8],
         "owner": user_id,
         "created": int(time.time()),
     }
@@ -177,7 +179,46 @@ def skills_system_block(skills: list[dict]) -> str:
     parts = ["\n\nACTIVE SKILLS (apply these rules to your answer):"]
     for s in skills:
         parts.append(f"- {s.get('name','skill')}: {s.get('instructions','')}")
+        chain = s.get("chain") or []
+        if chain:
+            parts.append(f"  PIPELINE — follow these steps in order: "
+                         + " → ".join(f"({i+1}) {c}" for i, c in enumerate(chain)))
     return "\n".join(parts)
+
+
+async def run_skill_tools(skills: list[dict], question: str) -> tuple[str, list[str]]:
+    """Force-run the tools declared by active skills (their 'tools' field),
+    in addition to whatever the question auto-triggers. Returns extra context."""
+    forced: set[str] = set()
+    for s in skills:
+        for t in (s.get("tools") or []):
+            forced.add(t)
+    if not forced:
+        return "", []
+    blocks, used = [], []
+    if "datetime" in forced:
+        res = tool_datetime()
+        blocks.append(f"[datetime] {res['weekday']} {res['date']} {res['time']} UTC")
+        used.append("datetime")
+    if "math" in forced:
+        m = re.search(r"\d[\d,\.\s\+\-\*\/\^\(\)]*\d", question)
+        if m:
+            res = tool_math(m.group(0))
+            if res.get("ok"):
+                blocks.append(f"[math] {res['expr']} = {res['result']}")
+                used.append("math")
+    if "omniverse" in forced:
+        res = await tool_omniverse(question)
+        if res.get("ok"):
+            blocks.append("[omniverse]\n" + res["omniverse"])
+            used.append("omniverse")
+    if "read_url" in forced:
+        for url in URL_RE.findall(question)[:2]:
+            res = await tool_read_url(url)
+            if res.get("ok"):
+                blocks.append(f"[web:{url}] {res['text'][:2500]}")
+                used.append("read_url")
+    return ("\n\n".join(blocks), used) if blocks else ("", used)
 
 
 # ------------------------------------------------------------------- tools --

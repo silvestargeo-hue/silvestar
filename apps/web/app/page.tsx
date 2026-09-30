@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type AuthUser } from "@/lib/api";
 import { AuthScreen } from "@/components/AuthScreen";
 import { ArchiveView } from "@/components/ArchiveView";
@@ -74,10 +74,21 @@ export default function Home() {
   const { count: notifCount, refresh: refreshNotifs } = useNotificationCount(user?.user_id || "anon");
 
   // PWA shortcuts / deep links land on /?tab=ask etc.
+  // Web clipper: /?import=<encoded text>&title=…&url=… → prefills Library import
+  const importPayload = useRef<{ title: string; text: string; url: string } | null>(null);
   useEffect(() => {
-    const t = new URLSearchParams(window.location.search).get("tab") as Tab | null;
+    const sp = new URLSearchParams(window.location.search);
+    const t = sp.get("tab") as Tab | null;
     if (t && ["panel", "ask", "library", "archive", "vault", "rooms", "graph", "skills", "crew", "settings", "guide", "admin"].includes(t)) {
       setTab(t);
+    }
+    // web clipper deep link: /?import=<text>&title=…&url=… (bookmarklet / mobile share)
+    const imp = sp.get("import");
+    if (imp) {
+      importPayload.current = { title: sp.get("title") || "Web clip", text: imp, url: sp.get("url") || "" };
+      try { localStorage.setItem("sv-import", JSON.stringify(importPayload.current)); } catch {}
+      setTab("library");
+      window.history.replaceState({}, "", window.location.pathname);
     }
   }, []);
 
