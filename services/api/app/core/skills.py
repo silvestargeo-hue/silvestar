@@ -219,9 +219,10 @@ async def tool_omniverse(question: str) -> dict:
     sources: list[str] = []
     snippets: list[str] = []
 
+    ua = {"User-Agent": "Silvestar/1.2 (free personal AI platform; +https://silvestar-web.vercel.app)"}
     # 1) Wikipedia REST summary (no key, generous limits)
     try:
-        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True, headers=ua) as client:
             r = await client.get(
                 "https://en.wikipedia.org/api/rest_v1/page/summary/" + quote(q.replace(" ", "_"))
             )
@@ -236,7 +237,7 @@ async def tool_omniverse(question: str) -> dict:
     # 2) Wikipedia opensearch if the direct summary missed
     if not snippets:
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            async with httpx.AsyncClient(timeout=10, headers=ua) as client:
                 r = await client.get("https://en.wikipedia.org/w/api.php", params={
                     "action": "opensearch", "search": q, "limit": 3, "format": "json"})
                 if r.status_code == 200:
@@ -254,7 +255,7 @@ async def tool_omniverse(question: str) -> dict:
 
     # 3) DuckDuckGo Instant Answer (no key)
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=10, headers=ua) as client:
             r = await client.get("https://api.duckduckgo.com/", params={
                 "q": q, "format": "json", "no_html": 1, "skip_disambig": 1})
             if r.status_code == 200:
@@ -336,6 +337,10 @@ def _parse_prompts_csv(csv_text: str) -> list[dict]:
     """Parse awesome-chatgpt-prompts CSV (act,prompt) into skill dicts."""
     import csv as _csv
     import io as _io
+    try:
+        _csv.field_size_limit(10 * 1024 * 1024)  # prompts.csv has huge fields
+    except Exception:
+        pass
     out = []
     try:
         rows = list(_csv.DictReader(_io.StringIO(csv_text)))
