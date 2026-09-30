@@ -29,7 +29,7 @@ from .core.ai import ai
 from .core.cache import cache
 from .core.db import db
 from .core.files import files as file_store
-from .core.file_routes import router as files_router
+from .core.file_routes import router as files_router, _uid_async
 from .core.graph import graph
 from .core.realtime import Client, hub, livekit
 from .core.vault import VaultError, vault
@@ -277,8 +277,9 @@ async def rag_query(body: AskIn):
 
 
 @app.post("/api/v1/ask", tags=["ai"])
-async def ask(body: AskIn):
-    return await ai.chat(body.question, body.user_id, body.vault_session_token, body.history,
+async def ask(body: AskIn, request: Request):
+    uid = body.user_id or await _uid_async(request)
+    return await ai.chat(body.question, uid, body.vault_session_token, body.history,
                          lang=body.lang, folder=body.folder)
 
 
