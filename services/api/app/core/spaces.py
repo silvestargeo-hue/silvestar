@@ -94,6 +94,28 @@ async def my_spaces(uid: str, email: str) -> dict:
     return {"spaces": sorted(spaces.values(), key=lambda s: s["name"])}
 
 
+async def delete_space(space: str, requester_uid: str) -> dict:
+    """Owner-only: delete a space and all its membership rows."""
+    doc = await db.fetch(_space_id(space))
+    if not doc:
+        return {"ok": False, "reason": "space not found"}
+    try:
+        content = json.loads(doc.get("content") or "{}")
+    except Exception:
+        content = {}
+    if content.get("owner") != requester_uid:
+        return {"ok": False, "reason": "only the owner can delete"}
+    rows, _t = await db.list("spaces", limit=200)
+    removed = 0
+    for r in rows:
+        m = r.get("meta") or {}
+        if m.get("kind") == "member" and m.get("space") == space:
+            await db.delete(r["id"])
+            removed += 1
+    await db.delete(_space_id(space))
+    return {"ok": True, "removed_members": removed}
+
+
 async def space_owner_uid(email: str, folder: str) -> str | None:
     """Owner's uid when `email` may READ folder `Space/<x>` (owner or member); else None.
     Used by file routes to serve shared-space files from the owner's subtree."""

@@ -579,6 +579,12 @@ async def space_remove(name: str, body: SpaceEmailIn, request: Request):
     return await spaces_svc.remove_member(name, body.email, uid)
 
 
+@app.delete("/api/v1/spaces/{name}", tags=["spaces"])
+async def space_delete(name: str, request: Request):
+    uid = await _uid_async(request)
+    return await spaces_svc.delete_space(name, uid)
+
+
 # ------------------------------------------ Module 16b: CSV data chat -------
 class DataChatIn(BaseModel):
     q: str = Field(min_length=1, max_length=500)
