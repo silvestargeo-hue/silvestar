@@ -34,6 +34,7 @@ from .core import skills as skills_svc
 from .core.crew import run_crew
 from .core import media as media_svc
 from .core import study as study_svc
+from .core import memory as memory_svc
 from .core import spaces as spaces_svc
 from .core.graph import graph
 from .core.realtime import Client, hub, livekit
@@ -295,6 +296,226 @@ async def ask(body: AskIn, request: Request):
                          lang=body.lang, folder=body.folder, file_path=body.file_path,
                          engine=body.engine, use_tools=body.use_tools, use_skills=body.use_skills,
                          file_paths=(body.file_paths or [])[:8])
+
+
+# ------------------------------------------------- Module 23: Memory Core ---
+@app.get("/api/v1/memory", tags=["memory"])
+async def memory_list(request: Request):
+    """What Silvestar knows about me — every learned memory, inspectable."""
+    uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in required")
+    return await memory_svc.list_memories(uid)
+
+
+@app.delete("/api/v1/memory/{mem_id}", tags=["memory"])
+async def memory_delete(mem_id: str, request: Request):
+    uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in required")
+    if not await memory_svc.delete_memory(uid, mem_id):
+        raise HTTPException(404, "memory not found")
+    return {"deleted": True}
+
+
+@app.delete("/api/v1/memory", tags=["memory"])
+async def memory_clear(request: Request):
+    """Forget everything (the user owns their memory)."""
+    uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in required")
+    return {"deleted": await memory_svc.clear_all(uid)}
+
+
+class MemoryIn(BaseModel):
+    text: str = Field(min_length=4, max_length=400)
+
+
+@app.post("/api/v1/memory", tags=["memory"])
+async def memory_add(body: MemoryIn, request: Request):
+    """Teach Silvestar a fact directly ("remember that …")."""
+    uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in required")
+    ok = await memory_svc.remember_fact(uid, body.text, kind="taught")
+    return {"stored": ok}
+
+
+# ------------------------------------------------- Module 24: Briefing ------
+def _speakable(md: str) -> str:
+    """Markdown → clean speakable text for TTS."""
+    import re as _re
+    t = _re.sub(r"[#*_`>\[\]]", "", md)
+    t = _re.sub(r"\n{2,}", ". ", t)
+    t = _re.sub(r"\s+", " ", t)
+    return t.strip()
+
+
+@app.get("/api/v1/briefing", tags=["user"])
+async def briefing(request: Request):
+    """Today's Morning Briefing: greeting, stats, due cards, reminders,
+    crew/research deliverables, quote — one AI-written episode + audio text."""
+    uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in required")
+    import datetime as _dt
+    import json as _j
+    hour = _dt.datetime.now().hour
+    greeting = "Good morning" if hour < 12 else ("Good afternoon" if hour < 18 else "Good evening")
+    parts: list[str] = []
+    try:
+        fs = await file_store.stats(uid)
+        parts.append(f"Library: {fs.get('files', 0)} files in {fs.get('folders', 0)} folders")
+    except Exception:
+        pass
+    try:
+        decks = (await study_svc.list_decks(uid)).get("decks", [])
+        due = sum(d.get("due", 0) for d in decks)
+        if due:
+            parts.append(f"{due} flashcard{'s' if due != 1 else ''} due for review")
+    except Exception:
+        pass
+    try:
+        rems, _t = await db.list(f"reminders:{uid}", limit=50)
+        import time as _t2
+        now = int(_t2.time())
+        upcoming = []
+        for r in rems:
+            try:
+                rec = _j.loads(r.get("content") or "{}")
+            except Exception:
+                continue
+            if not rec.get("fired") and int(rec.get("due", 0)) > now:
+                upcoming.append((int(rec["due"]), rec.get("text", "")))
+        upcoming.sort()
+        if upcoming:
+            when = _dt.datetime.fromtimestamp(upcoming[0][0])
+            parts.append(f"next reminder: {upcoming[0][1][:60]} (at {when.strftime('%H:%M')})")
+        if len(upcoming) > 1:
+            parts.append(f"and {len(upcoming) - 1} more scheduled")
+    except Exception:
+        pass
+    try:
+        rf = (await file_store.list_files(uid)).get("files", [])
+        fresh = [f for f in rf if f.get("folder") in ("Crew-Reports", "Research")]
+        if fresh:
+            fresh.sort(key=lambda f: int(f.get("uploaded", 0)), reverse=True)
+            parts.append(f"new report ready: {fresh[0]['name'].replace('.md', '').replace('-', ' ')}")
+    except Exception:
+        pass
+    try:
+        day = int(time.time()) // 86400
+        _q, _a = _QUOTES[day % len(_QUOTES)]
+        parts.append(f"today's quote: {_q[:90]} — {_a}")
+    except Exception:
+        pass
+    facts = "; ".join(parts) if parts else "a quiet day — nothing due"
+    name = uid if "@" in uid else "there"
+    try:
+        res = await ai.summarize(
+            f"Write a short {greeting.lower()} briefing (max 120 words) for the user named {name}. "
+            "Warm, upbeat radio-host tone. Weave in these facts naturally, then end with one "
+            "small actionable suggestion for today. Plain text only, no markdown.",
+            facts,
+        )
+        script = (res.get("summary") or f"{greeting}! Here is your day: {facts}.").strip()
+    except Exception:
+        script = f"{greeting}! Here is your day: {facts}."
+    return {"greeting": greeting, "script": script, "audio_text": _speakable(script),
+            "facts": parts, "date": _dt.date.today().isoformat()}
+
+
+# ------------------------------------------------- Module 25: Auto-lock -----
+class AutolockIn(BaseModel):
+    enabled: bool
+    pin: str = Field("", max_length=128)
+    timeout_minutes: int = Field(10, ge=1, le=1440)
+
+
+def _acct_doc_id(email: str) -> str:
+    return f"account::{email}"
+
+
+@app.post("/api/v1/me/autolock", tags=["user"])
+async def autolock_set(body: AutolockIn, request: Request):
+    """Server-side auto-lock preference: enabled, optional PIN (hashed with the
+    admin secret), and idle timeout. PIN never stored in plain text."""
+    uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in required")
+    import json as _j
+    email = uid if "@" in uid else ""
+    if not email:
+        rows, _t = await db.list(ACCOUNTS_LIB, limit=500)
+        for r in rows:
+            m = r.get("meta") or {}
+            if m.get("user_id") == uid:
+                email = r["id"].split("::", 1)[1]
+                break
+    if not email:
+        raise HTTPException(404, "account not found")
+    pin_hash = ""
+    if body.enabled and body.pin.strip():
+        pin_hash = hmac.new(settings.admin_key.encode(), body.pin.strip().encode(), "sha256").hexdigest()
+    rec = {"enabled": body.enabled, "pin_hash": pin_hash,
+           "timeout_minutes": body.timeout_minutes, "updated": int(time.time())}
+    await db.upsert_document(_acct_doc_id(email), ACCOUNTS_LIB, "autolock",
+                             _j.dumps(rec), meta={"kind": "autolock", "user_id": uid})
+    return {"ok": True, "enabled": body.enabled, "timeout_minutes": body.timeout_minutes}
+
+
+@app.get("/api/v1/me/autolock", tags=["user"])
+async def autolock_get(request: Request):
+    uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in required")
+    import json as _j
+    email = uid if "@" in uid else ""
+    if not email:
+        rows, _t = await db.list(ACCOUNTS_LIB, limit=500)
+        for r in rows:
+            m = r.get("meta") or {}
+            if m.get("user_id") == uid:
+                email = r["id"].split("::", 1)[1]
+                break
+    if not email:
+        return {"enabled": False, "has_pin": False, "timeout_minutes": 10}
+    doc = await db.fetch(_acct_doc_id(email))
+    rec = {}
+    if doc:
+        try:
+            rec = _j.loads(doc.get("content") or "{}")
+        except Exception:
+            rec = {}
+    return {"enabled": bool(rec.get("enabled")), "has_pin": bool(rec.get("pin_hash")),
+            "timeout_minutes": int(rec.get("timeout_minutes", 10))}
+
+
+@app.post("/api/v1/auth/unlock", tags=["auth"])
+async def auth_unlock(request: Request, pin: str = Query("")):
+    """Verify an auto-lock PIN without a full re-login. Returns ok/not."""
+    authz = request.headers.get("authorization", "")
+    user = None
+    if authz.startswith("Bearer "):
+        from .core.auth import auth as auth_svc
+        user = await auth_svc.validate_session(authz[7:])
+    if not user or user.get("status") != "active":
+        raise HTTPException(401, "sign in required")
+    email = str(user.get("email") or "")
+    doc = await db.fetch(_acct_doc_id(email))
+    rec = {}
+    if doc:
+        try:
+            import json as _j
+            rec = _j.loads(doc.get("content") or "{}")
+        except Exception:
+            rec = {}
+    ph = rec.get("pin_hash") or ""
+    if not ph:
+        return {"ok": True, "no_pin": True}
+    import hmac as _hmac
+    ok = _hmac.compare_digest(ph, hmac.new(settings.admin_key.encode(), pin.strip().encode(), "sha256").hexdigest())
+    return {"ok": bool(ok)}
 
 
 @app.post("/api/v1/ask/followups", tags=["ai"])
@@ -1178,6 +1399,48 @@ async def studio_podcast(body: PodcastIn, request: Request):
                f"Open Studio > Podcast to play it with voices.\n\n" + "\n\n".join(lines))
     saved = await file_store.upload(uid, fname, content.encode(), folder="Podcasts")
     return {"lines": lines[:80], "file": saved["path"], "name": fname,
+            "engine": res.get("engine", "")}
+
+
+class DesignIn(BaseModel):
+    prompt: str = Field(min_length=8, max_length=600)
+    style: str = Field(default="modern", max_length=40)
+    audience: str = Field(default="", max_length=120)
+
+
+@app.post("/api/v1/studio/design", tags=["studio"])
+async def studio_design(body: DesignIn, request: Request):
+    """AI Design: describe a screen → working HTML preview (rendered in a
+    sandboxed iframe; scripts disabled) + brand tokens. Free, on Groq."""
+    uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in required")
+    res = await ai.summarize(
+        "You are a senior product designer. Produce a COMPLETE single-file HTML page "
+        "for the described screen. Rules: modern, production-grade visual design "
+        "(cohesive palette, spacing, rounded cards, hover states); all CSS in one "
+        "<style> tag in <head>; NO JavaScript at all; NO external resources, fonts "
+        "or CDNs (system fonts only); fully responsive; use realistic sample data "
+        "(no lorem ipsum). Include a simple inline SVG logo. Return ONLY the HTML "
+        "document starting with <!DOCTYPE html>, nothing else.\n"
+        f"Style direction: {body.style}.\n"
+        + (f"Target audience: {body.audience}.\n" if body.audience else "")
+        + f"Screen to design: {body.prompt}",
+        "Produce the HTML now.",
+    )
+    html = str(res.get("summary", ""))
+    if "<" not in html or "html" not in html.lower()[:200]:
+        raise HTTPException(502, "design model returned no usable HTML")
+    # strip a possible markdown fence
+    if html.startswith("```"):
+        html = html.split("```", 2)[1]
+        if html.startswith("html"):
+            html = html[4:]
+        html = html.strip()
+    # palette extraction: pull hex colors from the CSS for brand chips
+    import re as _re
+    colors = _re.findall(r"#[0-9a-fA-F]{6}\b", html)[:6]
+    return {"html": html, "colors": list(dict.fromkeys(colors)),
             "engine": res.get("engine", "")}
 
 

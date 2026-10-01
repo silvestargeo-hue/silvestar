@@ -46,6 +46,65 @@ function useAccent() {
   return { accent, apply };
 }
 
+function PinCard({ authToken, onLockNow }: { authToken: string; onLockNow: () => void }) {
+  const API = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
+  const [pin, setPin] = useState("");
+  const [timeout_, setTimeout_] = useState(10);
+  const [hasPin, setHasPin] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [enabled, setEnabled] = useState(false);
+
+  const load = async () => {
+    try {
+      const r = await fetch(`${API}/api/v1/me/autolock`, { headers: { Authorization: `Bearer ${authToken}` } });
+      if (r.ok) {
+        const j = await r.json();
+        setHasPin(!!j.has_pin); setEnabled(!!j.enabled); setTimeout_(j.timeout_minutes || 10);
+      }
+    } catch {}
+  };
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [authToken]);
+
+  const save = async (on: boolean) => {
+    if (on && !hasPin && pin.trim().length < 4) { toast("Enter a PIN of 4+ digits first", "err"); return; }
+    setBusy(true);
+    try {
+      const r = await fetch(`${API}/api/v1/me/autolock`, {
+        method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ enabled: on, pin: pin.trim(), timeout_minutes: timeout_ }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.detail || `${r.status}`);
+      setEnabled(on); if (pin.trim()) setHasPin(true); setPin("");
+      toast(on ? "Auto-lock armed 🔒" : "Auto-lock off", "ok");
+    } catch (e) {
+      toast(String(e instanceof Error ? e.message : e), "err");
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="card" style={{ marginBottom: 14 }}>
+      <b>🔢 PIN auto-lock</b>
+      <div className="hint">Locks the app after {timeout_} min idle (or on start). Unlock with a quick PIN instead of your vault password.</div>
+      <div className="row" style={{ flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+        <input value={pin} type="password" inputMode="numeric" maxLength={12}
+          placeholder={hasPin ? "PIN set — type to change" : "New PIN (4+ digits)"}
+          onChange={(e) => setPin(e.target.value.replace(/\D/g, ""))} style={{ maxWidth: 180 }} />
+        <select value={timeout_} onChange={(e) => setTimeout_(Number(e.target.value))} aria-label="Idle timeout">
+          <option value={1}>after 1 min</option>
+          <option value={5}>after 5 min</option>
+          <option value={10}>after 10 min</option>
+          <option value={30}>after 30 min</option>
+        </select>
+        {enabled
+          ? <button className="btn ghost" disabled={busy} onClick={() => save(false)}>Disable</button>
+          : <button className="btn primary" disabled={busy} onClick={() => save(true)}>Arm auto-lock</button>}
+        <button className="btn ghost" onClick={onLockNow}>🔒 Lock now</button>
+      </div>
+    </div>
+  );
+}
+
 function TwoFACard({ authToken, email }: { authToken: string; email: string }) {
   const [status, setStatus] = useState<{ enabled: boolean; pending: boolean } | null>(null);
   const [secret, setSecret] = useState("");
@@ -265,6 +324,7 @@ export function SettingsView({ user, authToken, onUserUpdate, lockOn, onToggleLo
             {lockOn ? "✅ Enabled" : "Disabled"}
           </button>
         </div>
+        <PinCard authToken={authToken} onLockNow={onLockNow} />
         <div className="set-row">
           <div>
             <div className="set-t">Lock now</div>

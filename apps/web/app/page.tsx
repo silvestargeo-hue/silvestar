@@ -17,6 +17,8 @@ import { UniversalSearch } from "@/components/UniversalSearch";
 import { SettingsView } from "@/components/SettingsView";
 import { GuideView } from "@/components/GuideView";
 import { LockScreen } from "@/components/LockScreen";
+import { VoiceGlass } from "@/components/VoiceGlass";
+import { MemoryPanel, BriefingCard } from "@/components/MemoryPanel";
 import { Landing } from "@/components/Landing";
 import { UserPanel } from "@/components/UserPanel";
 import { AdminPanel } from "@/components/AdminPanel";
@@ -30,6 +32,7 @@ import { ShortcutsOverlay } from "@/components/ShortcutsOverlay";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useOnline, useTheme, toast, Modal } from "@/lib/kit";
 import "./lock.css";
+import "./voiceglass.css";
 
 type Tab = "panel" | "ask" | "library" | "archive" | "vault" | "rooms" | "graph" | "skills" | "crew" | "studio" | "study" | "settings" | "guide" | "admin";
 
@@ -82,9 +85,21 @@ export default function Home() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [usOpen, setUsOpen] = useState(false); // universal search
   const [locked, setLocked] = useState(false); // optional lock screen
+  const [pinMode, setPinMode] = useState(false); // lock screen in PIN mode
   const [lockOn, setLockOn] = useState(false); // setting: lock on start
+  const [voiceOpen, setVoiceOpen] = useState(false); // VoiceGlass overlay
   const [vaultSession, setVaultSession] = useState<string>(""); // vault unlock (separate from login)
   const [chatFile, setChatFile] = useState<{ path: string; name: string } | null>(null); // chat-with-one-file
+  const [memCount, setMemCount] = useState(-1); // Memory Core count (-1 = unknown)
+  useEffect(() => {
+    (async () => {
+      if (!user || !authToken) { setMemCount(-1); return; }
+      try {
+        const r = await fetch(`${(process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "")}/api/v1/memory`, { headers: { Authorization: `Bearer ${authToken}` } });
+        if (r.ok) setMemCount((await r.json()).total ?? 0);
+      } catch { setMemCount(-1); }
+    })();
+  }, [user, authToken, tab]);
   const [chatFiles, setChatFiles] = useState<{ path: string; name: string }[] | null>(null); // chat-with-selected-files
   const [adminFlag, setAdminFlag] = useState(false); // legacy admin-key login
   const [showLanding, setShowLanding] = useState(true); // landing before sign-in
@@ -232,6 +247,48 @@ export default function Home() {
 
   const goSettings = () => { setMenuOpen(false); setTab("settings"); };
 
+  // ---- PIN auto-lock: idle timeout + fetch the preference ----
+  useEffect(() => {
+    if (!user || !authToken) return;
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
+    let minutes = 10;
+    let armed = false;
+    const arm = async () => {
+      try {
+        const r = await fetch(`${(process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "")}/api/v1/me/autolock`, { headers: { Authorization: `Bearer ${authToken}` } });
+        if (r.ok) {
+          const j = await r.json();
+          armed = !!j.enabled; minutes = j.timeout_minutes || 10;
+        }
+      } catch {}
+    };
+    arm();
+    const resetIdle = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      if (armed && !locked) {
+        idleTimer = setTimeout(() => {
+          (async () => {
+            try {
+              const r = await fetch(`${(process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "")}/api/v1/me/autolock`, { headers: { Authorization: `Bearer ${authToken}` } });
+              const j = r.ok ? await r.json() : { has_pin: false };
+              setPinMode(!!j.has_pin);
+            } catch { setPinMode(false); }
+            setLocked(true);
+          })();
+        }, minutes * 60_000);
+      }
+    };
+    const evs = ["mousemove", "keydown", "click", "scroll", "touchstart"] as const;
+    evs.forEach((e) => window.addEventListener(e, resetIdle, { passive: true }));
+    resetIdle();
+    const pref = setInterval(arm, 5 * 60_000);
+    return () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      clearInterval(pref);
+      evs.forEach((e) => window.removeEventListener(e, resetIdle));
+    };
+  }, [user, authToken, locked]);
+
   const commands: Cmd[] = [
     ...visibleTabs.map((t) => ({ id: "go-" + t.id, icon: t.icon, label: "Go to " + t.label, run: () => setTab(t.id as Tab) })),
     { id: "notif", icon: "🔔", label: "Open notifications", run: () => setNotifOpen(true) },
@@ -262,7 +319,8 @@ export default function Home() {
     return (
       <LockScreen
         userId={user.user_id}
-        onUnlock={() => { setLocked(false); toast("Welcome back ✨", "ok"); }}
+        pinMode={pinMode}
+        onUnlock={() => { setLocked(false); setPinMode(false); toast("Welcome back ✨", "ok"); }}
         onSignOut={signOut}
       />
     );
@@ -271,6 +329,9 @@ export default function Home() {
   return (
     <div>
       {!online && <div className="offbanner">⚠ You are offline — showing cached content</div>}
+      {voiceOpen && (
+        <VoiceGlass userId={user.user_id} sessionToken={vaultSession} onClose={() => setVoiceOpen(false)} />
+      )}
 
       <Shell
         tabs={visibleTabs}
@@ -281,6 +342,7 @@ export default function Home() {
             <button className="mini ghost bell" onClick={() => setNotifOpen(true)} aria-label={`Notifications (${notifCount}) · due reminders (${remCount})`}>
               🔔{notifCount > 0 && <span className="dot">{notifCount}</span>}{remCount > 0 && <span className="dot" style={{ background: "var(--warn, #d97706)" }}>{remCount}⏰</span>}{pendingSync > 0 && <span className="dot" style={{ background: "var(--accent2, #22d3ee)" }}>{pendingSync}⇅</span>}
             </button>
+            <button className="mini ghost" onClick={() => setVoiceOpen(true)} aria-label="Voice assistant">🎙</button>
             <button className="mini ghost" onClick={() => setUsOpen(true)} aria-label="Universal search">🔍</button>
             <button className="mini ghost" onClick={() => setHelpOpen(true)} aria-label="Keyboard shortcuts">⌨</button>
             <div style={{ position: "relative" }}>
@@ -316,13 +378,17 @@ export default function Home() {
       >
         {tab === "panel" && (
           <ErrorBoundary>
-            <UserPanel
-              userId={user.user_id}
-              authToken={authToken}
-              sessionToken={vaultSession}
-              userName={user.display_name || user.email.split("@")[0]}
-              onNavigate={(id) => setTab(id as Tab)}
-            />
+            <div>
+              <BriefingCard authToken={authToken} userName={user.display_name || user.email.split("@")[0]} />
+              <MemoryPanel authToken={authToken} />
+              <UserPanel
+                userId={user.user_id}
+                authToken={authToken}
+                sessionToken={vaultSession}
+                userName={user.display_name || user.email.split("@")[0]}
+                onNavigate={(id) => setTab(id as Tab)}
+              />
+            </div>
           </ErrorBoundary>
         )}
         {tab === "ask" && (

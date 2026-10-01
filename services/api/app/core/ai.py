@@ -306,10 +306,21 @@ class SilvestarAI:
             from .vault import vault as vault_svc
             session = await vault_svc.validate(user_id, vault_session_token)
 
+        # Memory Core: quietly recall what we know about the user
+        mem_block = ""
+        if user_id and user_id != "anon":
+            try:
+                from .memory import recall_block
+                mem_block = await recall_block(user_id, question)
+            except Exception:
+                mem_block = ""
+
         context, cited, skills_block, tools_used, skill_names = await self._context_for(
             question, user_id, session, folder=folder, file_path=file_path,
             use_tools=use_tools, use_skills=use_skills, file_paths=file_paths)
         messages = self._build_messages(question, context, cited, history, lang)
+        if mem_block:
+            messages[0]["content"] += mem_block
         if skills_block:
             messages[0]["content"] += skills_block
 
@@ -345,6 +356,14 @@ class SilvestarAI:
         if not answer:
             answer = self._local_extractive(question, context)
 
+        # Memory Core: learn durable facts from this exchange (best-effort)
+        if user_id and user_id != "anon":
+            try:
+                from .memory import extract_from_exchange
+                await extract_from_exchange(user_id, question, answer)
+            except Exception:
+                pass
+
         return {
             "answer": answer,
             "engine": engine,
@@ -372,6 +391,14 @@ class SilvestarAI:
                 question, user_id, session, folder=folder, file_path=file_path,
                 use_tools=use_tools, use_skills=use_skills, file_paths=file_paths)
             messages = self._build_messages(question, context, cited, history, lang)
+            if user_id and user_id != "anon":
+                try:
+                    from .memory import recall_block
+                    mem_block = await recall_block(user_id, question)
+                    if mem_block:
+                        messages[0]["content"] += mem_block
+                except Exception:
+                    pass
             if skills_block:
                 messages[0]["content"] += skills_block
             citations = [{"i": i, "library": c.library, "title": c.title, "score": c.score,
@@ -435,6 +462,13 @@ class SilvestarAI:
             yield {"type": "done", "answer": answer, "engine": used, "tools_used": tools_used,
                    "skills_applied": skill_names,
                    "citations": citations, "latency_ms": int((time.time() - t0) * 1000)}
+            # Memory Core: learn durable facts from this exchange (best-effort)
+            if user_id and user_id != "anon" and answer:
+                try:
+                    from .memory import extract_from_exchange
+                    await extract_from_exchange(user_id, question, answer)
+                except Exception:
+                    pass
         except Exception as e:
             yield {"type": "error", "detail": str(e)[:200]}
 

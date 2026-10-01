@@ -8,6 +8,7 @@
 import { useRef, useState } from "react";
 import { toast, renderMarkdown } from "@/lib/kit";
 import { useI18n } from "@/lib/i18n";
+import { DesignPreview } from "./DesignPreview";
 
 const API = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
 
@@ -169,6 +170,11 @@ export function StudioView({ authToken, userId }: { authToken: string; userId: s
   const [podBusy, setPodBusy] = useState(false);
   const [podPlaying, setPodPlaying] = useState(-1);
   const podRef = useRef<HTMLInputElement>(null);
+  // AI design generator
+  const [dPrompt, setDPrompt] = useState("");
+  const [dStyle, setDStyle] = useState("modern");
+  const [designBusy, setDesignBusy] = useState(false);
+  const [dOut, setDOut] = useState<{ html: string; colors: string[] } | null>(null);
   const podStop = useRef(false);
 
   const authHeaders = (): Record<string, string> => (authToken ? { Authorization: `Bearer ${authToken}` } : {});
@@ -302,6 +308,25 @@ export function StudioView({ authToken, userId }: { authToken: string; userId: s
 
   const card = { marginBottom: 14 };
 
+  const makeDesign = async () => {
+    const p = dPrompt.trim();
+    if (p.length < 8 || designBusy) return;
+    setDesignBusy(true); setDOut(null);
+    try {
+      const r = await fetch(`${API}/api/v1/studio/design`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) },
+        body: JSON.stringify({ prompt: p, style: dStyle }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.detail || `${r.status}`);
+      setDOut({ html: j.html, colors: j.colors || [] });
+      toast("🎨 Design ready — preview below", "ok");
+    } catch (e) {
+      toast(String(e instanceof Error ? e.message : e), "err");
+    } finally { setDesignBusy(false); }
+  };
+
   return (
     <div className="view">
       <div className="view-head">
@@ -428,6 +453,29 @@ export function StudioView({ authToken, userId }: { authToken: string; userId: s
           </button>
         </div>
         {dans && <div style={{ marginTop: 10 }}>{renderMarkdown(dans)}</div>}
+      </div>
+
+      {/* AI design generator */}
+      <div className="card" style={card}>
+        <b>🎨 AI Design</b>
+        <div className="hint">Describe any screen — landing page, dashboard, profile… — and Silvestar designs a working HTML preview with colors, spacing and sample data. Copy or download the code.</div>
+        <div className="row" style={{ flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+          <input value={dPrompt} placeholder="e.g. landing page for a plant-care app"
+            onChange={(e) => setDPrompt(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && makeDesign()} disabled={dBusy} style={{ flex: 1, minWidth: 220 }} />
+          <select value={dStyle} onChange={(e) => setDStyle(e.target.value)} disabled={dBusy} aria-label="Style">
+            <option value="modern">modern</option>
+            <option value="minimal">minimal</option>
+            <option value="playful">playful</option>
+            <option value="corporate">corporate</option>
+            <option value="dark luxury">dark luxury</option>
+            <option value="glassmorphism">glassmorphism</option>
+          </select>
+          <button className="btn primary" disabled={designBusy || dPrompt.trim().length < 8} onClick={makeDesign}>
+            {designBusy ? "⏳ Designing…" : "🎨 Design it"}
+          </button>
+        </div>
+        {dOut && <DesignPreview html={dOut.html} colors={dOut.colors} />}
       </div>
     </div>
   );
