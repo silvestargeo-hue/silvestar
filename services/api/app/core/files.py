@@ -48,6 +48,13 @@ class FileStore:
     def __init__(self) -> None:
         self._repo: str = settings.github_data_repo
         self._client: Optional[httpx.AsyncClient] = None
+        self._commit_lock: Optional[asyncio.Lock] = None
+
+    def _lock(self) -> asyncio.Lock:
+        """GitHub Contents API rejects concurrent commits (409) — serialize them."""
+        if self._commit_lock is None:
+            self._commit_lock = asyncio.Lock()
+        return self._commit_lock
 
     def _ensure_client(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -74,16 +81,19 @@ class FileStore:
             "message": msg,
             "content": base64.b64encode(data).decode(),
         }
-        # fetch existing sha (overwrite support)
-        r = await c.get(f"/repos/{self._repo}/contents/{urllib.parse.quote(path)}")
-        if r.status_code == 200:
-            body["sha"] = r.json()["sha"]
-        r = await c.put(f"/repos/{self._repo}/contents/{urllib.parse.quote(path)}", json=body)
-        if r.status_code in (409, 422):
-            r2 = await c.get(f"/repos/{self._repo}/contents/{urllib.parse.quote(path)}")
-            if r2.status_code == 200:
-                body["sha"] = r2.json()["sha"]
+        async with self._lock():
+            r: Optional[httpx.Response] = None
+            for attempt in range(4):
+                # fetch existing sha (overwrite support)
+                r = await c.get(f"/repos/{self._repo}/contents/{urllib.parse.quote(path)}")
+                if r.status_code == 200:
+                    body["sha"] = r.json()["sha"]
+                else:
+                    body.pop("sha", None)
                 r = await c.put(f"/repos/{self._repo}/contents/{urllib.parse.quote(path)}", json=body)
+                if r.status_code not in (409, 422) or attempt == 3:
+                    break
+                await asyncio.sleep(1.0 + attempt)  # concurrent commit — back off
         r.raise_for_status()
         return r.json().get("content", {}) or {}
 
@@ -100,13 +110,20 @@ class FileStore:
 
     async def _delete_path(self, path: str) -> bool:
         c = self._ensure_client()
-        r = await c.get(f"/repos/{self._repo}/contents/{urllib.parse.quote(path)}")
-        if r.status_code == 404:
-            return False
-        sha = r.json()["sha"]
-        r = await c.request("DELETE", f"/repos/{self._repo}/contents/{urllib.parse.quote(path)}",
-                            json={"message": "silvestar: delete file", "sha": sha})
-        return r.status_code == 200
+        async with self._lock():
+            for attempt in range(4):
+                r = await c.get(f"/repos/{self._repo}/contents/{urllib.parse.quote(path)}")
+                if r.status_code == 404:
+                    return False
+                sha = r.json()["sha"]
+                rr = await c.request("DELETE", f"/repos/{self._repo}/contents/{urllib.parse.quote(path)}",
+                                     json={"message": "silvestar: delete file", "sha": sha})
+                if rr.status_code == 200:
+                    return True
+                if rr.status_code not in (409, 422) or attempt == 3:
+                    return False
+                await asyncio.sleep(1.0 + attempt)  # concurrent commit — back off
+        return False
 
     async def _kv_get(self, key: str) -> Optional[dict]:
         from .cache import cache
@@ -463,9 +480,11 @@ class FileStore:
         meta = idx["files"].get(path)
         if hard:
             ok = await self._delete_path(path)
-        else:
+        elif meta is not None:
             ok = True
-            idx.setdefault("trash", {})[path] = {**(meta or {}), "deleted": int(time.time())}
+            idx.setdefault("trash", {})[path] = {**meta, "deleted": int(time.time())}
+        else:
+            ok = False  # unknown path — nothing to trash
         idx["files"].pop(path, None)
         self._prune_folders(idx)
         await self._save_index(user_id, idx)
