@@ -928,9 +928,11 @@ async def e2ee_create(body: E2eeIn, request: Request):
     if uid == "anon":
         raise HTTPException(401, "sign in required")
     import base64 as _b64
+    def _b64u(s: str) -> bytes:
+        return _b64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
     try:
-        blob = _b64.b64decode(body.blob_b64)
-        key = _b64.b64decode(body.key_b64)
+        blob = _b64u(body.blob_b64)
+        key = _b64u(body.key_b64)
     except Exception:
         raise HTTPException(422, "invalid base64")
     if len(key) not in (16, 24, 32):
