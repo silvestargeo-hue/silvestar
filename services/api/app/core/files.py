@@ -660,6 +660,16 @@ class FileStore:
                 errors.append({"path": p, "error": str(e)[:140]})
         return {"renamed": len(results), "results": results, "errors": errors}
 
+    async def set_pin(self, user_id: str, path: str, pinned: bool) -> dict:
+        """Star/unstar a file — pinned files float to the top of the Library."""
+        idx = await self._user_index(user_id)
+        meta = idx["files"].get(path)
+        if not meta:
+            raise FileNotFoundError("file not found")
+        meta["pinned"] = bool(pinned)
+        await self._save_index(user_id, idx)
+        return {"path": path, "pinned": bool(pinned)}
+
     async def dedupe(self, user_id: str, keep: str = "oldest") -> dict:
         """Trash every duplicate copy, keeping the oldest (or newest) per group."""
         d = await self.duplicates(user_id)

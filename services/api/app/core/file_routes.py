@@ -90,7 +90,10 @@ async def _read_uid_for(request: Request, uid: str, path: str) -> str:
 async def list_files(request: Request, folder: str = "", prefix: str = ""):
     uid = await _uid_async(request)
     uid = await _space_list_uid(request, uid, folder)
-    return await files.list_files(uid, folder=folder, prefix=prefix)
+    listing = await files.list_files(uid, folder=folder, prefix=prefix)
+    # pinned first, then newest
+    listing["files"].sort(key=lambda f: (not f.get("pinned"), -f.get("uploaded", 0)))
+    return listing
 
 
 @router.get("/stats")
@@ -292,6 +295,53 @@ class RenameBatchIn(BaseModel):
     start: int = 1
 
 
+class ZipSelIn(BaseModel):
+    paths: list[str]
+    name: str = "selection.zip"
+
+
+@router.post("/zip-selected")
+async def zip_selected(request: Request, body: ZipSelIn):
+    """Download exactly the selected files as one ZIP (any folders)."""
+    uid = await _uid_async(request)
+    if not body.paths or len(body.paths) > 100:
+        raise HTTPException(422, "select 1..100 files")
+    buf = io.BytesIO()
+    n = 0
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for p in body.paths:
+            got = await files.download(uid, p)
+            if not got:
+                continue
+            data, _mime = got
+            arc = p.split("/", 2)[2] if p.count("/") >= 2 else p.rsplit("/", 1)[-1]
+            z.writestr(arc, data)
+            n += 1
+    if not n:
+        raise HTTPException(404, "no files found")
+    import urllib.parse as _up
+    safe = _up.quote(body.name or "selection.zip")
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{safe}"},
+    )
+
+
+class PinIn(BaseModel):
+    path: str
+    pinned: bool
+
+
+@router.post("/pin")
+async def pin_file(request: Request, body: PinIn):
+    uid = await _uid_async(request)
+    try:
+        return await files.set_pin(uid, body.path, body.pinned)
+    except FileNotFoundError:
+        raise HTTPException(404, "file not found")
+
+
 @router.post("/batch-rename")
 async def batch_rename(request: Request, body: RenameBatchIn):
     uid = await _uid_async(request)
@@ -425,55 +475,6 @@ async def public_download(request: Request, token: str, password: str = Query(""
     got = await files.resolve_share(token, password)
     if not got:
         raise HTTPException(404, "link expired, revoked, or wrong password")
-    data, mime, name = got
-    safe = urllib.parse.quote(name)
-    return Response(
-        content=data,
-        media_type=mime,
-        headers={"Content-Disposition": f"inline; filename*=UTF-8''{safe}"},
-    )
-
-
-# ------------------------------------------------------------ share links --
-@router.post("/share")
-async def share_file(request: Request, body: DeleteIn):
-    """body.path = file path → returns {token, url} for a public share link."""
-    uid = await _uid_async(request)
-    if uid == "anon":
-        raise HTTPException(401, "sign in to share files")
-    try:
-        r = await files.create_share(uid, body.path)
-    except FileNotFoundError:
-        raise HTTPException(404, "file not found")
-    base = str(request.base_url).rstrip("/")
-    return {**r, "url": f"{base}/api/v1/files/public/{r['token']}"}
-
-
-@router.get("/shares")
-async def shares(request: Request):
-    uid = await _uid_async(request)
-    if uid == "anon":
-        raise HTTPException(401, "sign in to manage shares")
-    return await files.list_shares(uid)
-
-
-@router.post("/share/revoke")
-async def revoke_share(request: Request, body: ShareRevokeIn):
-    uid = await _uid_async(request)
-    if uid == "anon":
-        raise HTTPException(401, "sign in to manage shares")
-    try:
-        return await files.revoke_share(uid, body.token)
-    except FileNotFoundError:
-        raise HTTPException(404, "share not found")
-
-
-@router.get("/public/{token}")
-async def public_download(request: Request, token: str):
-    """No-auth public access for a valid, unrevoked share token."""
-    got = await files.resolve_share(token)
-    if not got:
-        raise HTTPException(404, "link expired or revoked")
     data, mime, name = got
     safe = urllib.parse.quote(name)
     return Response(

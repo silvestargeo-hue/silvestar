@@ -16,6 +16,12 @@ const ACCENTS: { name: string; color: string }[] = [
   { name: "Rose", color: "#ff5c8a" },
   { name: "Amber", color: "#ffb020" },
   { name: "Azure", color: "#4f8cff" },
+  { name: "Magenta", color: "#e33bff" },
+  { name: "Lime", color: "#a3e635" },
+  { name: "Coral", color: "#ff7f50" },
+  { name: "Gold", color: "#d4af37" },
+  { name: "Teal", color: "#14b8a6" },
+  { name: "Crimson", color: "#dc2626" },
 ];
 
 type Health = {

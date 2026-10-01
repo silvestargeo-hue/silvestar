@@ -20,8 +20,20 @@ type DeckRow = { name: string; cards: number; due: number };
 type SpaceRow = { name: string; role: string; folder: string };
 type CrewFile = { name: string; path: string; uploaded: number };
 type RemRow = { id: string; text: string; due: number; repeat: string; fired: boolean };
+type StreakRes = { streak: number; best: number; active_days: number; cells: { day: number; count: number }[] };
+type RecentFile = { name: string; path: string; folder: string; uploaded: number };
 
 const API = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
+
+/** PWA install prompt capture (module-level; fires once per page load) */
+type InstallEvent = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: string }> };
+let svInstallEvent: InstallEvent | null = null;
+if (typeof window !== "undefined") {
+  window.addEventListener("beforeinstallprompt", (e) => {
+    e.preventDefault();
+    svInstallEvent = e as InstallEvent;
+  });
+}
 
 const WIDGETS = ["tiles", "quick", "recent", "study", "spaces", "crew", "rem"] as const;
 type WidgetId = (typeof WIDGETS)[number];
@@ -74,6 +86,25 @@ export function UserPanel({ userId, authToken, sessionToken, userName, onNavigat
   const [remWhen, setRemWhen] = useState("");
   const [remRep, setRemRep] = useState("");
   const [remBusy, setRemBusy] = useState(false);
+  const [quote, setQuote] = useState<{ quote: string; author: string } | null>(null);
+  const [streak, setStreak] = useState<StreakRes | null>(null);
+  const [recentFiles, setRecentFiles] = useState<RecentFile[]>([]);
+  const [canInstall, setCanInstall] = useState(!!svInstallEvent);
+  useEffect(() => {
+    const t = setInterval(() => setCanInstall(!!svInstallEvent), 1500);
+    const stop = setTimeout(() => clearInterval(t), 25000);
+    return () => { clearInterval(t); clearTimeout(stop); };
+  }, []);
+  const installApp = async () => {
+    if (!svInstallEvent) return;
+    svInstallEvent.prompt();
+    try {
+      const choice = await svInstallEvent.userChoice;
+      toast(choice.outcome === "accepted" ? "Installing Silvestar… 🎉" : "Install dismissed", choice.outcome === "accepted" ? "ok" : "err");
+    } catch { /* ignore */ }
+    svInstallEvent = null;
+    setCanInstall(false);
+  };
   const [widgets, setWidgets] = useState<WidgetId[]>(DEFAULT_WIDGETS);
   const [customize, setCustomize] = useState(false);
   const { t } = useI18n();
@@ -106,6 +137,21 @@ export function UserPanel({ userId, authToken, sessionToken, userName, onNavigat
       const r = await fetch(`${API}/api/v1/reminders`, { headers: authHeaders() });
       if (r.ok) setRems(((await r.json()).reminders || []) as RemRow[]);
     } catch { setRems([]); }
+    try {
+      const r = await fetch(`${API}/api/v1/daily-quote`);
+      if (r.ok) setQuote(await r.json());
+    } catch { setQuote(null); }
+    try {
+      const r = await fetch(`${API}/api/v1/me/streak`, { headers: authHeaders() });
+      if (r.ok) setStreak(await r.json());
+    } catch { setStreak(null); }
+    try {
+      const r = await fetch(`${API}/api/v1/files`, { headers: authHeaders() });
+      if (r.ok) {
+        const fs = ((await r.json()).files || []) as RecentFile[];
+        setRecentFiles(fs.filter((f) => f.uploaded > 0).slice(0, 5));
+      }
+    } catch { setRecentFiles([]); }
   }, [userId, sessionToken, authHeaders]);
 
   useEffect(() => {
@@ -155,8 +201,26 @@ export function UserPanel({ userId, authToken, sessionToken, userName, onNavigat
 
   const dueDecks = decks.filter((d) => d.due > 0);
 
+  const fmtIn = (due: number) => {
+    const s = due - Date.now() / 1000;
+    if (s <= 0) return "due now";
+    if (s < 3600) return `in ${Math.max(1, Math.round(s / 60))} min`;
+    if (s < 86400) return `in ${Math.round(s / 3600)} h`;
+    return `in ${Math.round(s / 86400)} d`;
+  };
+
+  const heatColor = (n: number) =>
+    n === 0 ? "rgba(128,128,128,.15)" : n < 3 ? "#8a05ff44" : n < 8 ? "#8a05ff88" : "#8a05ff";
+
   return (
     <div>
+      {quote && (
+        <div className="card" style={{ marginBottom: 14, borderLeft: "4px solid var(--accent)", padding: "12px 16px" }}>
+          <div style={{ fontSize: 17, fontStyle: "italic" }}>“{quote.quote}”</div>
+          <div className="muted small" style={{ marginTop: 4 }}>— {quote.author} · quote of the day</div>
+        </div>
+      )}
+
       <div className="home-hero">
         <div className="home-hero-text">
           <h1>{t(greetingKey())}{userName ? `, ${userName}` : ""} 👋</h1>
@@ -168,6 +232,7 @@ export function UserPanel({ userId, authToken, sessionToken, userName, onNavigat
           <button className="btn ghost" title="Show or hide dashboard widgets" onClick={() => setCustomize(!customize)}>
             {customize ? "✕" : "⚙"} Widgets
           </button>
+          {canInstall && <button className="btn ghost" onClick={installApp} title="Add Silvestar to your home screen / desktop">⬇ Install app</button>}
         </div>
       </div>
 
@@ -202,7 +267,24 @@ export function UserPanel({ userId, authToken, sessionToken, userName, onNavigat
 
       {(widgets.includes("study") || widgets.includes("spaces") || widgets.includes("crew")) && (
         <div className="grid2" style={{ marginBottom: 14 }}>
-          {widgets.includes("study") && (
+      {widgets.includes("tiles") && streak && (
+        <div className="card" style={{ marginBottom: 14, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 16 }}>
+          <div>
+            <div style={{ fontSize: 30, fontWeight: 800, color: "var(--accent)" }}>
+              {streak.streak > 0 ? `🔥 ${streak.streak}` : "🌱"}
+            </div>
+            <div className="muted small">day streak{streak.best > streak.streak ? ` · best ${streak.best}` : ""} · {streak.active_days} active days</div>
+          </div>
+          <div style={{ display: "grid", gridTemplateRows: "repeat(7, 12px)", gridAutoFlow: "column", gap: 3 }} title="Last 13 weeks of activity">
+            {streak.cells.map((c) => (
+              <span key={c.day} title={`${c.count} activity · ${new Date(c.day * 86400000).toLocaleDateString()}`}
+                style={{ width: 12, height: 12, borderRadius: 3, background: heatColor(c.count) }} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {(widgets.includes("study") || widgets.includes("spaces") || widgets.includes("crew")) && widgets.includes("study") && (
             <div className="card">
               <h2>🃏 Study due</h2>
               {dueDecks.length ? dueDecks.slice(0, 4).map((d) => (
@@ -274,7 +356,7 @@ export function UserPanel({ userId, authToken, sessionToken, userName, onNavigat
                 <div key={r.id} className="hit" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                   <div>
                     <div className="t">{r.fired ? "🔔" : "⏰"} {r.text}{r.repeat ? ` (${r.repeat})` : ""}</div>
-                    <div className="muted small">{new Date(r.due * 1000).toLocaleString()}{r.fired ? " · notified" : ""}</div>
+                    <div className="muted small">{new Date(r.due * 1000).toLocaleString()} · {!r.fired && <b style={{ color: "var(--accent)" }}>{fmtIn(r.due)}</b>}{r.fired ? " · notified" : ""}</div>
                   </div>
                   <button className="mini ghost" onClick={() => delReminder(r.id)} title="Delete reminder">✕</button>
                 </div>
@@ -319,18 +401,27 @@ export function UserPanel({ userId, authToken, sessionToken, userName, onNavigat
 
         {widgets.includes("recent") && (
           <div className="card">
-            <h2>🕒 {t("recentArchive")}</h2>
-            {stats?.recent_archive.length ? (
-              stats.recent_archive.map((d) => (
-                <div key={d.id} className="hit">
-                  <div className="t">📄 {d.title}</div>
-                </div>
-              ))
-            ) : (
-              <div className="hint">Nothing published yet — add documents from the Archive tab.</div>
+            <h2>🕘 Timeline — what happened when</h2>
+            {recentFiles.length ? recentFiles.map((f) => (
+              <div key={f.path} className="hit" style={{ borderLeft: "3px solid var(--accent)", paddingLeft: 10, marginBottom: 6 }}>
+                <div className="t">📄 {f.name} <span className="muted small">{f.folder ? `· ${f.folder}` : ""}</span></div>
+                <div className="muted small">● {new Date(f.uploaded * 1000).toLocaleString()}</div>
+              </div>
+            )) : (
+              <div className="hint">Upload files to build your timeline.</div>
             )}
+            {stats?.recent_archive.length ? (
+              <>
+                <div className="muted small" style={{ marginTop: 8, fontWeight: 600 }}>Recent archive documents</div>
+                {stats.recent_archive.slice(0, 3).map((d) => (
+                  <div key={d.id} className="hit">
+                    <div className="t">📚 {d.title}</div>
+                  </div>
+                ))}
+              </>
+            ) : null}
             <div className="notice" style={{ marginTop: 10 }}>
-              💡 Tip: press <b>Ctrl+K</b> anywhere to jump between sections, or <b>?</b> for all shortcuts.
+              💡 Tip: press <b>Ctrl+K</b> anywhere — it's also a calculator (try <code>45*12+7</code>).
             </div>
           </div>
         )}

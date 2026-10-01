@@ -10,7 +10,7 @@ import { useI18n } from "@/lib/i18n";
 
 type FileMeta = {
   id: string; name: string; path: string; folder: string;
-  size: number; mime: string; note?: string; uploaded: number; indexed: boolean;
+  size: number; mime: string; note?: string; uploaded: number; indexed: boolean; pinned?: boolean;
 };
 type ListRes = { files: FileMeta[]; folders: string[]; total: number };
 
@@ -570,6 +570,48 @@ export function LibraryView({ userId, sessionToken, onChatWithFile, onChatWithFi
   const [sumOne, setSumOne] = useState("");
   const [sumOneBusy, setSumOneBusy] = useState(false);
 
+  const togglePin = async (f: FileMeta) => {
+    try {
+      const r = await fetch(`${API}/api/v1/files/pin`, {
+        method: "POST", headers: { "Content-Type": "application/json", ...authHeaders(sessionToken, userId) },
+        body: JSON.stringify({ path: f.path, pinned: !f.pinned }),
+      });
+      if (!r.ok) throw new Error(`${r.status}`);
+      toast(f.pinned ? "Unpinned" : "⭐ Pinned to top", "ok");
+      load(folder);
+    } catch (e) {
+      toast(String(e instanceof Error ? e.message : e), "err");
+    }
+  };
+
+  const zipSelected = async () => {
+    if (zipBusy) return;
+    setZipBusy(true);
+    try {
+      const r = await fetch(`${API}/api/v1/files/zip-selected`, {
+        method: "POST", headers: { "Content-Type": "application/json", ...authHeaders(sessionToken, userId) },
+        body: JSON.stringify({ paths: [...selected], name: "selection.zip" }),
+      });
+      if (!r.ok) throw new Error(`${r.status}`);
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = "selection.zip"; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+      toast("🗜 ZIP downloaded", "ok");
+    } catch (e) {
+      toast(String(e instanceof Error ? e.message : e), "err");
+    } finally { setZipBusy(false); }
+  };
+
+  const speakSummary = () => {
+    try {
+      speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(sumOne.replace(/[#*`_]/g, ""));
+      speechSynthesis.speak(u);
+    } catch { /* not supported */ }
+  };
+
   const runFileSummary = async (f: FileMeta) => {
     setSumFile(f); setSumOne(""); setSumOneBusy(true);
     try {
@@ -921,6 +963,7 @@ export function LibraryView({ userId, sessionToken, onChatWithFile, onChatWithFi
         <div className="bulk-bar">
           <b>{selected.size}</b>&nbsp;selected
           <button className="btn tiny" onClick={chatWithSelected} title="Chat with all selected indexed files at once">💬 Chat</button>
+          <button className="btn tiny" disabled={zipBusy} onClick={zipSelected} title="Download exactly the selected files as one ZIP">{zipBusy ? "⏳" : "🗜 ZIP"}</button>
           <button className="btn tiny" onClick={() => setRenOpen(true)} title="Rename all selected files by pattern">✏ Rename</button>
           <button className="btn tiny" onClick={() => bulkOp("move", folder)}>{folder ? `Move here (${folder})` : "Move to root"}</button>
           <button className="btn tiny" onClick={() => { const f2 = prompt("Move to folder (empty = root):", folder || ""); if (f2 !== null) bulkOp("move", f2); }}>➡ Move to…</button>
@@ -973,10 +1016,11 @@ export function LibraryView({ userId, sessionToken, onChatWithFile, onChatWithFi
               </label>
               <button className="file-open" onClick={() => openViewer(f)} title="View">
                 <span className="file-icon">{icon(f.mime, f.name)}</span>
-                <span className="file-name">{f.name}</span>
+                <span className="file-name">{f.pinned ? "⭐ " : ""}{f.name}</span>
               </button>
-              <span className="file-meta muted small">{fmtSize(f.size)}{f.indexed ? " · 🔍 AI-indexed" : ""}</span>
+              <span className="file-meta muted small">{fmtSize(f.size)}{f.indexed ? " · 🔍 AI-indexed" : ""}{f.indexed && f.size > 2048 ? ` · ~${Math.max(1, Math.round(f.size / 1200))} min read` : ""}</span>
               <div className="file-actions">
+                <button className="btn tiny" onClick={() => togglePin(f)} title={f.pinned ? "Unpin" : "Pin to top"}>{f.pinned ? "⭐" : "☆"}</button>
                 <button className="btn tiny" onClick={() => openViewer(f)} title="View">👁</button>
                 <button className="btn tiny" onClick={() => dl(f)} title="Download">⬇</button>
               <button className="btn tiny" onClick={() => { setRenameTarget(f); setRenameVal(f.name); }} title="Rename">✏</button>
@@ -996,11 +1040,12 @@ export function LibraryView({ userId, sessionToken, onChatWithFile, onChatWithFi
             {visible.map((f) => (
               <tr key={f.path} style={selected.has(f.path) ? { outline: `2px solid ${design.accent}` } : undefined}>
                 <td><input type="checkbox" aria-label={`Select ${f.name}`} checked={selected.has(f.path)} onChange={() => toggleSel(f.path)} /></td>
-                <td><button className="link" onClick={() => openViewer(f)}>{icon(f.mime, f.name)} {f.name}</button></td>
-                <td>{fmtSize(f.size)}</td>
+                <td><button className="link" onClick={() => openViewer(f)}>{f.pinned ? "⭐ " : ""}{icon(f.mime, f.name)} {f.name}</button></td>
+                <td>{fmtSize(f.size)}{f.indexed && f.size > 2048 ? ` · ~${Math.max(1, Math.round(f.size / 1200))} min` : ""}</td>
                 <td>{f.folder || "—"}</td>
                 <td>{new Date(f.uploaded * 1000).toLocaleDateString()}</td>
                 <td className="file-actions">
+                  <button className="btn tiny" onClick={() => togglePin(f)} title={f.pinned ? "Unpin" : "Pin to top"}>{f.pinned ? "⭐" : "☆"}</button>
                   <button className="btn tiny" onClick={() => dl(f)}>⬇</button>
                   <button className="btn tiny" onClick={() => { setRenameTarget(f); setRenameVal(f.name); }}>✏</button>
                 <button className="btn tiny" onClick={() => { setMoveTarget(f); setMoveVal(f.folder); }}>➡</button>
@@ -1023,7 +1068,9 @@ export function LibraryView({ userId, sessionToken, onChatWithFile, onChatWithFi
           ) : (
             <div style={{ marginTop: 4 }}>
               {renderMarkdown(sumOne || "No summary produced.")}
-              <div className="row" style={{ marginTop: 12, justifyContent: "flex-end" }}>
+              <div className="row" style={{ marginTop: 12, justifyContent: "flex-end", flexWrap: "wrap" }}>
+                <button className="btn ghost" onClick={speakSummary} title="Read the summary aloud">🔊 Listen</button>
+                <button className="btn ghost" onClick={() => { try { speechSynthesis.cancel(); } catch {}}} title="Stop reading">⏹</button>
                 <button className="btn ghost" onClick={() => { navigator.clipboard?.writeText(sumOne); toast("Summary copied", "ok"); }}>📋 Copy</button>
                 {onChatWithFile && <button className="btn primary" onClick={() => { setSumFile(null); chatWithFile(sumFile); }}>💬 Chat with this file</button>}
               </div>

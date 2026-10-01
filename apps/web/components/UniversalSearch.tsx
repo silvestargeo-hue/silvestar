@@ -45,6 +45,17 @@ export function UniversalSearch({ authToken, userId, onClose, onOpenFile }: {
 
   const icon = (kind: string) => (kind === "file" ? "📁" : kind === "archive" ? "📚" : "🌐");
 
+  // instant math: a pure arithmetic expression → live calculator result
+  const mathExpr = q.trim().match(/^[\d()+.\-*/%^\s]{2,60}$/) && /[\d)]\s*[+\-*/%^]/.test(q.trim()) && /[\d]/.test(q.trim().slice(-1)) ? q.trim() : "";
+  let mathAns = "";
+  if (mathExpr) {
+    try {
+      // eslint-disable-next-line no-new-func
+      const v = Function(`"use strict"; return (${mathExpr.replace(/\^/g, "**")})`)();
+      if (typeof v === "number" && isFinite(v)) mathAns = String(Math.round(v * 1e10) / 1e10);
+    } catch { /* ignore */ }
+  }
+
   return (
     <Modal title="🔍 Universal Search" onClose={onClose}>
       <div className="row">
@@ -53,6 +64,14 @@ export function UniversalSearch({ authToken, userId, onClose, onOpenFile }: {
           onKeyDown={(e) => e.key === "Enter" && run()} />
         <button onClick={run} disabled={busy || !q.trim()}>{busy ? "…" : t("aiSearchBtn")}</button>
       </div>
+      {mathAns && (
+        <div className="card" style={{ marginTop: 10, padding: "10px 12px" }}>
+          <span className="muted small">🧮 {mathExpr} =</span>
+          <b style={{ fontSize: 22, marginLeft: 8 }}>{mathAns}</b>
+          <button className="btn tiny ghost" style={{ marginLeft: 10 }}
+            onClick={() => { navigator.clipboard?.writeText(mathAns); }} title="Copy result">📋</button>
+        </div>
+      )}
       {results.map((r, i) => (
         <div key={`${r.kind}-${r.id}-${i}`} className="row" style={{ justifyContent: "space-between", alignItems: "flex-start", marginTop: 10 }}>
           <span>

@@ -1161,6 +1161,84 @@ async def admin_set_ai_model(request: Request, body: ModelIn):
     return {"active_model": body.model or settings.ai_model, "persisted": bool(body.model)}
 
 
+# ------------------------------------------- Module 20: delight & stats -----
+_QUOTES = [
+    ("Simplicity is the ultimate sophistication.", "Leonardo da Vinci"),
+    ("The best way out is always through.", "Robert Frost"),
+    ("What we know is a drop, what we don't know is an ocean.", "Isaac Newton"),
+    ("Order and simplification are the first steps toward mastery.", "Thomas Mann"),
+    ("It always seems impossible until it's done.", "Nelson Mandela"),
+    ("The secret of getting ahead is getting started.", "Mark Twain"),
+    ("Well begun is half done.", "Aristotle"),
+    ("Make it simple, but significant.", "Don Draper"),
+    ("Knowledge is of no value unless you put it into practice.", "Anton Chekhov"),
+    ("Small deeds done are better than great deeds planned.", "Peter Marshall"),
+    ("The disciplined use of time is a sign of self-respect.", "Harvey Mackay"),
+    ("A place for everything, everything in its place.", "Benjamin Franklin"),
+    ("Genius is one percent inspiration, ninety-nine percent perspiration.", "Thomas Edison"),
+    ("You do not rise to the level of your goals, you fall to the level of your systems.", "James Clear"),
+    ("The journey of a thousand miles begins with a single step.", "Lao Tzu"),
+]
+
+
+@app.get("/api/v1/daily-quote", tags=["user"])
+async def daily_quote():
+    """Quote of the day — same for everyone, changes at midnight UTC."""
+    day = int(time.time()) // 86400
+    q, a = _QUOTES[day % len(_QUOTES)]
+    return {"quote": q, "author": a}
+
+
+@app.get("/api/v1/time", tags=["user"])
+async def server_time():
+    """Server UTC date — lets the client build streaks/heatmaps without spoofing."""
+    return {"now": int(time.time()), "day": int(time.time()) // 86400}
+
+
+@app.get("/api/v1/me/streak", tags=["user"])
+async def me_streak(request: Request):
+    """Login streak (consecutive days) + 91-day activity heatmap (12 weeks).
+    Activity = library file uploads + reminder activity, bucketed by UTC day."""
+    uid = await _uid_async(request)
+    today = int(time.time()) // 86400
+    days: dict[int, int] = {}
+    try:
+        hits, _t = await db.search(f"files:{uid}", " ", limit=100)
+        for h in hits:
+            m = h.get("meta") or {}
+            d = int(m.get("uploaded") or 0) // 86400
+            if d:
+                days[d] = days.get(d, 0) + 1
+    except Exception:
+        pass
+    try:
+        rows, _t2 = await db.list(f"reminders:{uid}", limit=100)
+        import json as _j2
+        for r in rows:
+            try:
+                rec = _j2.loads(r.get("content") or "{}")
+                d = int(rec.get("created") or 0) // 86400
+                if d:
+                    days[d] = days.get(d, 0) + 1
+            except Exception:
+                continue
+    except Exception:
+        pass
+    # 91-day buckets (today = last cell)
+    cells = [{"day": today - (90 - i), "count": days.get(today - (90 - i), 0)} for i in range(91)]
+    # streak: consecutive active days ending today (today optional)
+    streak, d = 0, today if days.get(today) else today - 1
+    while days.get(d):
+        streak += 1
+        d -= 1
+    best = cur = 0
+    for i in range(91):
+        cur = cur + 1 if days.get(today - (90 - i)) else 0
+        best = max(best, cur)
+    total_active = len(days)
+    return {"streak": streak, "best": best, "active_days": total_active, "cells": cells}
+
+
 @app.get("/api/v1/me/stats", tags=["user"])
 async def me_stats(user_id: str = Query(...), session_token: str = Query("")):
     session = await vault.validate(user_id, session_token) if session_token else None

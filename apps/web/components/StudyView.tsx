@@ -71,6 +71,21 @@ export function StudyView({ authToken, userId }: { authToken: string; userId: st
     setDone((d) => d + 1);
     if (idx + 1 >= reviewing.cards.length) {
       toast(`${t("sessionDone")} (${done + 1})`, "ok");
+      // 🎉 confetti burst on session complete
+      try {
+        const colors = ["#8a05ff", "#22c55e", "#f59e0b", "#ef4444", "#3b82f6"];
+        for (let i = 0; i < 28; i++) {
+          const c = document.createElement("span");
+          c.textContent = "🎉";
+          c.style.cssText = `position:fixed;z-index:99999;left:${45 + Math.random() * 10}vw;top:38vh;font-size:${12 + Math.random() * 14}px;pointer-events:none;transition:transform 1.1s cubic-bezier(.2,.7,.3,1),opacity 1.1s;opacity:1`;
+          document.body.appendChild(c);
+          requestAnimationFrame(() => {
+            c.style.transform = `translate(${(Math.random() - 0.5) * 90}vw, ${20 + Math.random() * 45}vh) rotate(${(Math.random() - 0.5) * 720}deg)`;
+            c.style.opacity = "0";
+          });
+          setTimeout(() => c.remove(), 1300);
+        }
+      } catch { /* decorative only */ }
       setReviewing(null);
       loadDecks();
     } else {

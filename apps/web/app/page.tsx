@@ -58,6 +58,16 @@ function applySavedAccent() {
   } catch { /* ignore */ }
 }
 
+/** PWA install prompt capture (Chrome/Edge desktop + Android) */
+type InstallEvent = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: string }> };
+let deferredInstall: InstallEvent | null = null;
+if (typeof window !== "undefined") {
+  window.addEventListener("beforeinstallprompt", (e) => {
+    e.preventDefault();
+    deferredInstall = e as InstallEvent;
+  });
+}
+
 export default function Home() {
   const [tab, setTab] = useState<Tab>("panel");
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -79,6 +89,22 @@ export default function Home() {
   const { theme, toggle: toggleTheme } = useTheme();
   const online = useOnline();
   const { count: notifCount, refresh: refreshNotifs } = useNotificationCount(user?.user_id || "anon");
+  const [canInstall, setCanInstall] = useState(false);
+  useEffect(() => {
+    const t = setInterval(() => setCanInstall(!!deferredInstall), 1500);
+    setTimeout(() => clearInterval(t), 20000);
+    return () => clearInterval(t);
+  }, []);
+  const installApp = async () => {
+    if (!deferredInstall) return;
+    deferredInstall.prompt();
+    try {
+      const choice = await deferredInstall.userChoice;
+      toast(choice.outcome === "accepted" ? "Installing Silvestar… 🎉" : "Install dismissed", choice.outcome === "accepted" ? "ok" : "err");
+    } catch { /* ignore */ }
+    deferredInstall = null;
+    setCanInstall(false);
+  };
   const [remCount, setRemCount] = useState(0);
   useEffect(() => {
     (async () => {
@@ -179,6 +205,7 @@ export default function Home() {
     { id: "help", icon: "⌨", label: "Keyboard shortcuts", run: () => setHelpOpen(true) },
     { id: "settings", icon: "⚙️", label: "Open settings", run: goSettings },
     { id: "theme", icon: "🌓", label: "Toggle theme", run: toggleTheme },
+    ...(canInstall ? [{ id: "install", icon: "⬇", label: "Install Silvestar as an app", run: installApp }] : []),
     { id: "lock", icon: "🔒", label: "Lock screen now", run: () => { if (lockOn) setLocked(true); else { toast("Enable the lock screen in Settings first"); setTab("settings"); } } },
     { id: "signout", icon: "🚪", label: "Sign out", run: signOut },
   ];
