@@ -209,11 +209,22 @@ class Database:
         assert self._pg_pool
         async with self._pg_pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT id, title, left(content, 280) AS snippet, created_at FROM documents WHERE library = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+                "SELECT id, title, content, meta, created_at FROM documents WHERE library = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
                 library, limit, offset,
             )
             total = await conn.fetchval("SELECT count(*) FROM documents WHERE library = $1", library)
-        return ([{"id": r["id"], "title": r["title"], "snippet": r["snippet"]} for r in rows], int(total or 0))
+        # Full content + meta so consumers can filter by meta.kind (spaces, crews).
+        # `snippet` kept for older consumers.
+        out = []
+        for r in rows:
+            try:
+                meta = json.loads(r["meta"] or "{}")
+            except Exception:
+                meta = {}
+            out.append({"id": r["id"], "title": r["title"], "content": r["content"],
+                        "snippet": (r["content"] or "")[:280], "meta": meta,
+                        "created": r["created_at"]})
+        return out, int(total or 0)
 
     async def pg_delete(self, doc_id: str) -> bool:
         assert self._pg_pool
