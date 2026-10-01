@@ -109,7 +109,7 @@ export const api = {
 
   // AI
   ask: (question: string, user_id: string, vault_session_token = "", history: { role: string; content: string }[] = [],
-        opts: { lang?: string; folder?: string; file_path?: string; file_paths?: string[]; engine?: string } = {}) =>
+        opts: { lang?: string; folder?: string; file_path?: string; file_paths?: string[]; engine?: string; persona_id?: string } = {}) =>
     req<AskResult>("/api/v1/ask", {
       method: "POST",
       body: JSON.stringify({
@@ -119,6 +119,7 @@ export const api = {
         ...(opts.file_path ? { file_path: opts.file_path } : {}),
         ...(opts.file_paths?.length ? { file_paths: opts.file_paths } : {}),
         ...(opts.engine ? { engine: opts.engine } : {}),
+        ...(opts.persona_id ? { persona_id: opts.persona_id } : {}),
       }),
     }),
 
@@ -154,12 +155,15 @@ export const api = {
     question: string, user_id: string, vault_session_token = "",
     history: { role: string; content: string }[] = [],
     opts: { lang?: string; folder?: string; file_path?: string; file_paths?: string[]; engine?: string } = {},
+    extra?: { persona_id?: string } | AbortSignal,
     signal?: AbortSignal,
   ) {
+    const persona_id = extra && !(extra instanceof AbortSignal) ? extra.persona_id : undefined;
+    const sig = extra instanceof AbortSignal ? extra : signal;
     const res = await fetch(`${API_URL}/api/v1/ask/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      signal,
+      signal: sig,
       body: JSON.stringify({
         question, user_id, vault_session_token, history,
         ...(opts.lang ? { lang: opts.lang } : {}),
@@ -167,6 +171,7 @@ export const api = {
         ...(opts.file_path ? { file_path: opts.file_path } : {}),
         ...(opts.file_paths?.length ? { file_paths: opts.file_paths } : {}),
         ...(opts.engine ? { engine: opts.engine } : {}),
+        ...(persona_id ? { persona_id } : {}),
       }),
     });
     if (!res.ok || !res.body) throw new Error(`${res.status}: ${res.statusText}`);

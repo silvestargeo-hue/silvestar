@@ -6,6 +6,8 @@ import { useEffect, useState } from "react";
 import { api, type AuthUser } from "@/lib/api";
 import { toast, Modal, useOnline, useTheme } from "@/lib/kit";
 import { LANGS, useI18n, setLang, type Lang } from "@/lib/i18n";
+import { GraphBrain } from "./GraphBrain";
+import { HooksPanel } from "./HooksPanel";
 
 const API = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
 
@@ -325,6 +327,8 @@ export function SettingsView({ user, authToken, onUserUpdate, lockOn, onToggleLo
           </button>
         </div>
         <PinCard authToken={authToken} onLockNow={onLockNow} />
+        <GraphBrain authToken={authToken} />
+        <HooksPanel authToken={authToken} />
         <div className="set-row">
           <div>
             <div className="set-t">Lock now</div>

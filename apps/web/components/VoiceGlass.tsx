@@ -36,8 +36,22 @@ export function VoiceGlass({
   const [result, setResult] = useState<AskResult | null>(null);
   const [memCount, setMemCount] = useState<number | null>(null);
   const [remembered, setRemembered] = useState<number[]>([]); // turn indexes saved
+  const [personas, setPersonas] = useState<{ id: string; name: string; emoji: string; pitch: number }[]>([]);
+  const [persona, setPersona] = useState("");
+  const pitchRef = useRef(1.0);
   const levelRef = useRef<number>(0);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // personas for the picker
+  useEffect(() => {
+    (async () => {
+      try {
+        const API = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
+        const r = await fetch(`${API}/api/v1/personas`);
+        if (r.ok) setPersonas(((await r.json()).personas || []).slice(0, 12));
+      } catch {}
+    })();
+  }, []);
 
   // memory count for the header chip
   useEffect(() => {
@@ -85,7 +99,7 @@ export function VoiceGlass({
     try {
       speechSynthesis?.cancel();
       const u = new SpeechSynthesisUtterance(text.slice(0, 600));
-      u.rate = 1.04; u.pitch = 1.0;
+      u.rate = 1.04; u.pitch = pitchRef.current;
       const vs = speechSynthesis?.getVoices?.() || [];
       const v = vs.find((x) => /en/i.test(x.lang) && /female|samantha|zira|google/i.test(x.name)) || vs[0];
       if (v) u.voice = v;
@@ -101,8 +115,9 @@ export function VoiceGlass({
     setCaption("");
     setThinking(true);
     try {
-      const r = await api.ask(q, userId, sessionToken, []);
+      const r = await api.ask(q, userId, sessionToken, [], persona ? { persona_id: persona } : {});
       setResult(r);
+      pitchRef.current = (r as { persona_pitch?: number }).persona_pitch || 1.0;
       const ans = r.answer || "";
       setTurns((t) => [...t, { who: "sv", text: ans }]);
       setThinking(false);
@@ -152,6 +167,15 @@ export function VoiceGlass({
         {memCount !== null && memCount > 0 && (
           <span className="vg-mem" title="What Silvestar remembers about you">🧠 {memCount}</span>
         )}
+      </div>
+
+      <div className="vg-persona-row">
+        {personas.map((p) => (
+          <button key={p.id} className={`vg-chip ${persona === p.id ? "on" : ""}`}
+            onClick={() => { setPersona(persona === p.id ? "" : p.id); }}>
+            {p.emoji} {p.name}
+          </button>
+        ))}
       </div>
 
       <div className="vg-orb-zone">

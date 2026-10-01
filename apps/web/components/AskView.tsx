@@ -38,6 +38,17 @@ export function AskView({ userId, sessionToken, authToken, chatFile, chatFiles, 
   const [error, setError] = useState("");
   const [tts, setTts] = useState(false);
   const [lang, setLang] = useState("");
+  const [personas, setPersonas] = useState<{ id: string; name: string; emoji: string; tagline: string }[]>([]);
+  const [persona, setPersona] = useState("");
+  useEffect(() => {
+    (async () => {
+      try {
+        const API = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
+        const r = await fetch(`${API}/api/v1/personas`, { headers: authToken ? { Authorization: `Bearer ${authToken}` } : {} });
+        if (r.ok) setPersonas(((await r.json()).personas || []).slice(0, 12));
+      } catch {}
+    })();
+  }, [authToken]);
   const [folders, setFolders] = useState<string[]>([]);
   const [scope, setScope] = useState("");   // "" = all sources, else folder name
   const [engine, setEngine] = useState<string>(() => { try { return localStorage.getItem("sv-engine") || ""; } catch { return ""; } });
@@ -90,6 +101,7 @@ export function AskView({ userId, sessionToken, authToken, chatFile, chatFiles, 
       for await (const ev of api.askStream(
         q, userId, sessionToken, history,
         { lang: lang || undefined, folder: effectiveScope || undefined, file_path: fileScope || undefined, file_paths: fileScopes.length ? fileScopes : undefined, engine: engine || undefined },
+        persona ? { persona_id: persona } : undefined,
         ac.signal,
       )) {
         if (ev.type === "meta") {
@@ -173,6 +185,14 @@ export function AskView({ userId, sessionToken, authToken, chatFile, chatFiles, 
             <select value={lang} onChange={(e) => setLang(e.target.value)} aria-label={t("answerLang")}>
               {AI_LANGS.map((l) => (
                 <option key={l.id} value={l.id}>{l.id === "" ? t("answerLangAuto") : l.label}</option>
+              ))}
+            </select>
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span className="hint" style={{ margin: 0 }}>🎭 Persona</span>
+            <select value={persona} onChange={(e) => setPersona(e.target.value)} aria-label="Persona">
+              {personas.map((p) => (
+                <option key={p.id} value={p.id}>{p.emoji} {p.name}</option>
               ))}
             </select>
           </label>

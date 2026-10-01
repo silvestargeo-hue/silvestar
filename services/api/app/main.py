@@ -37,6 +37,8 @@ from .core import study as study_svc
 from .core import memory as memory_svc
 from .core import goals as goals_svc
 from .core import radar as radar_svc
+from .core import kg as kg_svc
+from .core import hooks as hooks_svc
 from .core import spaces as spaces_svc
 from .core.graph import graph
 from .core.realtime import Client, hub, livekit
@@ -115,6 +117,7 @@ class AskIn(BaseModel):
     engine: str = ""   # preferred engine: "" auto | groq | pollinations | openrouter
     use_tools: bool = True   # builtin auto-tools (omniverse, web, math, time)
     use_skills: bool = True  # auto-apply user + gallery skills
+    persona_id: str = ""    # Persona Studio: builtin:* or a custom persona id
 
 
 class GraphNodeIn(BaseModel):
@@ -297,10 +300,16 @@ async def ask(body: AskIn, request: Request):
     # client-supplied user_id only serves anonymous/local usage
     session_uid = await _uid_async(request)
     uid = session_uid if session_uid != "anon" else (body.user_id or "anon")
-    return await ai.chat(body.question, uid, body.vault_session_token, body.history,
-                         lang=body.lang, folder=body.folder, file_path=body.file_path,
-                         engine=body.engine, use_tools=body.use_tools, use_skills=body.use_skills,
-                         file_paths=(body.file_paths or [])[:8])
+    persona_block, pitch = "", 1.0
+    if body.persona_id:
+        from .core import personas as personas_svc
+        persona_block, pitch = await personas_svc.persona_block(uid, body.persona_id)
+    out = await ai.chat(body.question, uid, body.vault_session_token, body.history,
+                        lang=body.lang, folder=body.folder, file_path=body.file_path,
+                        engine=body.engine, use_tools=body.use_tools, use_skills=body.use_skills,
+                        file_paths=(body.file_paths or [])[:8], persona_block=persona_block)
+    out["persona_pitch"] = pitch
+    return out
 
 
 # ------------------------------------------------- Module 23: Memory Core ---
@@ -486,6 +495,212 @@ async def studio_weekly_cast(request: Request, body: WeeklyCastIn = None):
         raise HTTPException(502, "model returned no usable dialogue")
     return {"lines": lines[:60], "files": [f["name"] for f in fresh],
             "engine": res.get("engine", "")}
+
+
+# ------------------------------------------------- Module 30: Personas ------
+from .core import personas as personas_svc
+
+
+@app.get("/api/v1/personas", tags=["personas"])
+async def personas_list(request: Request):
+    uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in required")
+    return await personas_svc.list_personas(uid)
+
+
+class PersonaIn(BaseModel):
+    name: str = Field(min_length=2, max_length=40)
+    tagline: str = Field(default="", max_length=120)
+    instructions: str = Field(default="", max_length=2000)
+    emoji: str = Field(default="🎭", max_length=4)
+    pitch: float = Field(1.0, ge=0.5, le=2.0)
+    persona_id: str = ""
+
+
+@app.post("/api/v1/personas", tags=["personas"])
+async def personas_save(body: PersonaIn, request: Request):
+    uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in required")
+    return await personas_svc.upsert_persona(uid, body.name, body.tagline,
+                                             body.instructions, body.emoji,
+                                             body.pitch, body.persona_id)
+
+
+@app.delete("/api/v1/personas/{persona_id}", tags=["personas"])
+async def personas_delete(persona_id: str, request: Request):
+    uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in required")
+    if not await personas_svc.delete_persona(uid, persona_id):
+        raise HTTPException(404, "persona not found (built-ins cannot be deleted)")
+    return {"deleted": True}
+
+
+# ------------------------------------------- Module 31: Knowledge Graph Brain
+@app.post("/api/v1/kg/harvest", tags=["kg"])
+async def kg_harvest(request: Request):
+    """Extract entities + relations from the newest Library files into your
+    personal knowledge graph (one AI pass per file)."""
+    uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in required")
+    return await kg_svc.harvest(uid)
+
+
+@app.get("/api/v1/kg/map", tags=["kg"])
+async def kg_map(request: Request):
+    """Your personal graph as nodes+links for the interactive map."""
+    uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in required")
+    return await kg_svc.map_data(uid)
+
+
+class KgAskIn(BaseModel):
+    source: str = Field(min_length=1, max_length=60)
+    target: str = Field(min_length=1, max_length=60)
+
+
+@app.post("/api/v1/kg/connect", tags=["kg"])
+async def kg_connect(body: KgAskIn, request: Request):
+    """How are two entities connected? BFS path + AI explanation."""
+    uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in required")
+    return await kg_svc.connect(uid, body.source, body.target)
+
+
+# ------------------------------------------- Module 32: Personal Webhooks ----
+@app.get("/api/v1/hooks/me", tags=["hooks"])
+async def hooks_me(request: Request):
+    """Your webhook token, usage, recent calls and the ready-made URLs."""
+    uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in required")
+    rec = await hooks_svc.get_or_create_token(uid)
+    base = "https://silvestar-api.vercel.app/api/v1/hooks/"
+    tok = rec["token"]
+    return {"token": tok, "calls": int(rec.get("calls", 0)),
+            "created": rec.get("created"),
+            "urls": {
+                "note": f"{base}n?t={tok}&text=NOTE",
+                "reminder": f"{base}r?t={tok}&text=TEXT&in_minutes=30",
+                "ask": f"{base}a?t={tok}&text=QUESTION",
+            },
+            "recent": await hooks_svc.recent_calls(uid)}
+
+
+@app.post("/api/v1/hooks/me/rotate", tags=["hooks"])
+async def hooks_rotate(request: Request):
+    uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in required")
+    rec = await hooks_svc.rotate_token(uid)
+    return {"token": rec["token"]}
+
+
+async def _hook_uid(token: str) -> str | None:
+    import json as _hook_json
+    rows, _t = await db.list("hooks", limit=500)
+    for r in rows:
+        if (r.get("meta") or {}).get("kind") != "hook-token":
+            continue
+        try:
+            rec = _hook_json.loads(r.get("content") or "{}")
+        except Exception:
+            continue
+        if rec.get("token") == token:
+            try:
+                rec["calls"] = int(rec.get("calls", 0)) + 1
+                await db.upsert_document(r["id"], r["library"], r.get("title", ""),
+                                         _hook_json.dumps(rec), meta=r.get("meta") or {})
+            except Exception:
+                pass
+            return (r.get("meta") or {}).get("user_id") or r["library"].split(":", 1)[1]
+    return None
+
+
+def _hook_resp(uid: str, action: str, ok: bool, detail: str, extra: dict | None = None):
+    import asyncio as _aio
+    try:
+        _aio.get_running_loop().create_task(hooks_svc.audit(uid, action, detail, ok))
+    except Exception:
+        pass
+    payload = {"ok": ok}
+    if extra:
+        payload.update(extra)
+    if not ok:
+        payload["error"] = detail
+    return payload
+
+
+async def _hook_auth(token: str, action: str) -> str:
+    if not token:
+        raise HTTPException(401, "missing token (?t=)")
+    uid = await _hook_uid(token)
+    if not uid:
+        raise HTTPException(401, "invalid token")
+    if not await hooks_svc.rate_ok(uid):
+        await hooks_svc.audit(uid, action, "rate limited", False)
+        raise HTTPException(429, "rate limit: max 30 actions/hour")
+    return uid
+
+
+def _hook_text(request: Request, body: dict | None) -> str:
+    q = request.query_params.get("text", "")
+    if not q and body:
+        q = str(body.get("text") or "")
+    return q.strip()[:4000]
+
+
+@app.post("/api/v1/hooks/n", tags=["hooks"])
+async def hook_note(request: Request, body: dict = None):
+    """Push a note: it lands in Library → Inbox/ and is AI-indexed."""
+    text = _hook_text(request, body)
+    uid = await _hook_auth(request.query_params.get("t", ""), "note")
+    if not text:
+        return _hook_resp(uid, "note", False, "give text via ?text= or JSON {text}")
+    title = text.replace("\n", " ")[:40].strip() or "note"
+    fname = time.strftime("note-%Y%m%d-%H%M%S") + ".md"
+    await file_store.upload(uid, fname, text.encode(), folder="Inbox")
+    return _hook_resp(uid, "note", True, f"saved Inbox/{fname}",
+                      {"file": f"Inbox/{fname}"})
+
+
+@app.post("/api/v1/hooks/r", tags=["hooks"])
+async def hook_reminder(request: Request, body: dict = None):
+    text = _hook_text(request, body)
+    uid = await _hook_auth(request.query_params.get("t", ""), "reminder")
+    if not text:
+        return _hook_resp(uid, "reminder", False, "give text via ?text= or JSON {text}")
+    try:
+        mins = int(request.query_params.get("in_minutes", "30"))
+    except ValueError:
+        mins = 30
+    mins = max(1, min(mins, 60 * 24 * 30))
+    due = int(time.time()) + mins * 60
+    import uuid
+    rid = uuid.uuid4().hex[:10]
+    await db.upsert_document(
+        _rem_id(uid, rid), f"reminders:{uid}", text[:80],
+        __import__("json").dumps({"text": text[:300], "due": due,
+                                  "repeat": "", "fired": False,
+                                  "created": int(time.time()), "via": "webhook"}),
+        meta={"kind": "reminder"})
+    return _hook_resp(uid, "reminder", True, f"set in {mins} min", {"id": rid, "due": due})
+
+
+@app.post("/api/v1/hooks/a", tags=["hooks"])
+async def hook_ask(request: Request, body: dict = None):
+    text = _hook_text(request, body)
+    uid = await _hook_auth(request.query_params.get("t", ""), "ask")
+    if not text:
+        return _hook_resp(uid, "ask", False, "give question via ?text= or JSON {text}")
+    res = await ai.chat(text, uid)
+    return _hook_resp(uid, "ask", True, "answered",
+                      {"answer": (res.get("answer") or "")[:1500], "engine": res.get("engine")})
 
 
 # ------------------------------------------------- Module 24: Briefing ------

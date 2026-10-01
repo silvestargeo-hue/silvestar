@@ -299,7 +299,8 @@ class SilvestarAI:
     async def chat(self, question: str, user_id: str = "anon", vault_session_token: str = "",
                    history: list[dict] | None = None, lang: str = "", folder: str = "",
                    file_path: str = "", engine: str = "", use_tools: bool = True,
-                   use_skills: bool = True, file_paths: list[str] | None = None) -> dict:
+                   use_skills: bool = True, file_paths: list[str] | None = None,
+                   persona_block: str = "") -> dict:
         t0 = time.time()
         session = None
         if vault_session_token:
@@ -319,6 +320,8 @@ class SilvestarAI:
             question, user_id, session, folder=folder, file_path=file_path,
             use_tools=use_tools, use_skills=use_skills, file_paths=file_paths)
         messages = self._build_messages(question, context, cited, history, lang)
+        if persona_block:
+            messages[0]["content"] = persona_block + "\n\n" + messages[0]["content"]
         if mem_block:
             messages[0]["content"] += mem_block
         if skills_block:
