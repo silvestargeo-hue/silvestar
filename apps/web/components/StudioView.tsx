@@ -163,6 +163,14 @@ export function StudioView({ authToken, userId }: { authToken: string; userId: s
   const [dans, setDans] = useState("");
   const [dBusy, setDBusy] = useState(false);
 
+  const [podFile, setPodFile] = useState<File | null>(null);
+  const [podLines, setPodLines] = useState<string[]>([]);
+  const [podTitle, setPodTitle] = useState("");
+  const [podBusy, setPodBusy] = useState(false);
+  const [podPlaying, setPodPlaying] = useState(-1);
+  const podRef = useRef<HTMLInputElement>(null);
+  const podStop = useRef(false);
+
   const authHeaders = (): Record<string, string> => (authToken ? { Authorization: `Bearer ${authToken}` } : {});
 
   const genImage = async () => {
@@ -247,6 +255,51 @@ export function StudioView({ authToken, userId }: { authToken: string; userId: s
     } finally { setDBusy(false); }
   };
 
+  const makePodcast = async () => {
+    if (!podFile || podBusy) return;
+    setPodBusy(true); setPodLines([]);
+    try {
+      const text = (await podFile.text()).slice(0, 60000);
+      const r = await fetch(`${API}/api/v1/studio/podcast`, {
+        method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ text, title: podTitle.trim() || podFile.name.replace(/\.[^.]+$/, ""), seconds: 150 }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.detail || `${r.status}`);
+      setPodLines(j.lines || []);
+      toast("🎙 Podcast script ready — press ▶", "ok");
+    } catch (e) {
+      toast(String(e instanceof Error ? e.message : e), "err");
+    } finally { setPodBusy(false); }
+  };
+
+  const playPodcast = async () => {
+    if (podPlaying >= 0) { podStop.current = true; speechSynthesis.cancel(); setPodPlaying(-1); return; }
+    podStop.current = false;
+    const pick = (want: string) => {
+      const vs = speechSynthesis.getVoices();
+      return vs.find((v) => v.name.toLowerCase().includes(want)) || vs.find((v) => v.lang.startsWith("en")) || vs[0];
+    };
+    for (let i = 0; i < podLines.length; i++) {
+      if (podStop.current) return;
+      setPodPlaying(i);
+      const isMaya = podLines[i].toUpperCase().startsWith("MAYA:");
+      const body = podLines[i].split(":").slice(1).join(":").trim();
+      await new Promise<void>((resolve) => {
+        const u = new SpeechSynthesisUtterance(body);
+        const v = pick(isMaya ? "female" : "male");
+        if (v) u.voice = v;
+        u.pitch = isMaya ? 1.15 : 0.9;
+        u.rate = 1.02;
+        u.onend = () => resolve();
+        u.onerror = () => resolve();
+        speechSynthesis.speak(u);
+      });
+    }
+    setPodPlaying(-1);
+    toast("🎙 Podcast finished", "ok");
+  };
+
   const card = { marginBottom: 14 };
 
   return (
@@ -311,6 +364,54 @@ export function StudioView({ authToken, userId }: { authToken: string; userId: s
         </div>
         {insights && (
           <div style={{ marginTop: 10 }}>{renderMarkdown(insights)}</div>
+        )}
+      </div>
+
+      {/* podcast generator */}
+      <div className="card" style={card}>
+        <b>🎙 Podcast generator</b>
+        <div className="hint">Turn any text/document into a two-host show (MAYA & LEO) with browser voices. Script saved to Library/Podcasts.</div>
+        <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
+          <button className="btn primary" disabled={podBusy} onClick={() => podRef.current?.click()}>
+            {podBusy ? "⏳ Writing the show…" : "⬆ Pick .txt/.md file"}
+          </button>
+          <input value={podTitle} placeholder="Show title (optional)" style={{ flex: 1, minWidth: 140 }}
+            onChange={(e) => setPodTitle(e.target.value)} disabled={podBusy} />
+        </div>
+        <input ref={podRef} type="file" accept=".txt,.md,text/plain,text/markdown" hidden
+          onChange={(e) => { setPodFile(e.target.files?.[0] || null); setPodLines([]); e.target.value = ""; }} />
+        {podFile && (
+          <div className="row" style={{ marginTop: 8 }}>
+            <span className="muted small">📄 {podFile.name}</span>
+            <button className="btn primary" disabled={podBusy} onClick={makePodcast}>🎬 Write the show</button>
+          </div>
+        )}
+        {podLines.length > 0 && (
+          <div style={{ marginTop: 10 }}>
+            <div className="row" style={{ justifyContent: "space-between" }}>
+              <b>{podLines.length} lines</b>
+              <button className="btn primary" onClick={playPodcast}>
+                {podPlaying >= 0 ? `⏹ Stop (${podPlaying + 1}/${podLines.length})` : "▶ Play with voices"}
+              </button>
+            </div>
+            <div style={{ maxHeight: 260, overflow: "auto", marginTop: 8 }}>
+              {podLines.map((ln, i) => {
+                const maya = ln.toUpperCase().startsWith("MAYA:");
+                return (
+                  <div key={i} style={{
+                    textAlign: maya ? "left" : "right", margin: "6px 0",
+                    opacity: podPlaying === -1 || podPlaying === i ? 1 : 0.45,
+                    transition: "opacity .3s",
+                  }}>
+                    <span className="small" style={{
+                      display: "inline-block", maxWidth: "85%", padding: "6px 10px", borderRadius: 12,
+                      background: maya ? "rgba(138,5,255,.12)" : "rgba(0,212,255,.10)",
+                    }}><b>{maya ? "🎙 MAYA" : "🎙 LEO"}: </b>{ln.split(":").slice(1).join(":").trim()}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         )}
       </div>
 

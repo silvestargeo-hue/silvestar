@@ -493,6 +493,36 @@ class FileStore:
         await db.delete("d-" + _fdoc_id(user_id, path)[2:])
         return {"deleted": ok, "was_indexed": bool(meta and meta.get("indexed")), "trashed": not hard}
 
+    # --------------------------------------------------------------- e2ee --
+    async def e2ee_store(self, user_id: str, name: str, mime: str, data: bytes) -> dict:
+        """Store ENCRYPTED bytes for a zero-knowledge share. Server never sees plaintext."""
+        import secrets as _s
+        tok = "ez" + _s.token_urlsafe(12)
+        path = f"e2ee/{tok}.bin"
+        await self._put_bytes(path, data, "silvestar: e2ee blob")
+        rec = {"token": tok, "path": path, "name": name[:80], "mime": mime[:60],
+               "size": len(data), "created": int(time.time()), "user_id": user_id,
+               "e2ee": True}
+        await self._kv_set("share:" + tok, rec)
+        await self._remember_share(user_id, tok, rec)
+        return rec
+
+    async def e2ee_meta(self, token: str) -> Optional[dict]:
+        rec = await self._kv_get("share:" + token)
+        if not rec or not rec.get("e2ee"):
+            return None
+        return {"name": rec.get("name", "file"), "mime": rec.get("mime", ""),
+                "size": rec.get("size", 0), "created": rec.get("created", 0)}
+
+    async def e2ee_fetch(self, token: str) -> Optional[dict]:
+        rec = await self._kv_get("share:" + token)
+        if not rec or not rec.get("e2ee"):
+            return None
+        data = await self._get_bytes(rec.get("path", ""))
+        if data is None:
+            return None
+        return {"name": rec.get("name", "file"), "mime": rec.get("mime", ""), "data": data}
+
     # -------------------------------------------------------------- trash --
     async def list_trash(self, user_id: str) -> dict:
         """Trash contents; lazily hard-deletes entries older than 30 days."""

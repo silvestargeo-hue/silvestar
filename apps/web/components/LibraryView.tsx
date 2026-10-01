@@ -6,6 +6,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { toast, Modal, copyText, renderMarkdown } from "@/lib/kit";
+import { MindMap } from "./MindMap";
+import { newKeyB64, encryptBytes } from "@/lib/e2ee";
 import { useI18n } from "@/lib/i18n";
 
 type FileMeta = {
@@ -470,6 +472,31 @@ export function LibraryView({ userId, sessionToken, onChatWithFile, onChatWithFi
     } finally { setBusy(false); }
   };
 
+  const doE2eeShare = async (f: FileMeta) => {
+    if (!f.indexed) { toast("Only text-indexed files can be zero-knowledge shared right now", "err"); return; }
+    setBusy(true);
+    try {
+      // fetch plaintext (indexed text file) via the view endpoint
+      const v = await fetch(`${API}/api/v1/files/view?path=${encodeURIComponent(f.path)}`, { headers: authHeaders(sessionToken, userId) });
+      if (!v.ok) throw new Error(`fetch failed: ${v.status}`);
+      const bytes = new Uint8Array(await v.arrayBuffer());
+      const key = await newKeyB64();
+      const blob = await encryptBytes(key, bytes);
+      const r = await fetch(`${API}/api/v1/files/e2ee`, {
+        method: "POST", headers: { "Content-Type": "application/json", ...authHeaders(sessionToken, userId) },
+        body: JSON.stringify({ name: f.name, mime: "text/markdown", blob_b64: blob, key_b64: key }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.detail || `${r.status}`);
+      const url = `${window.location.origin}/?e2ee=${j.token}#${key}`;
+      setShareTarget(null); setSharePass("");
+      setShareUrl(url);
+      toast("🔒 Zero-knowledge link created — key lives in the #fragment", "ok");
+    } catch (e) {
+      toast(String(e instanceof Error ? e.message : e), "err");
+    } finally { setBusy(false); }
+  };
+
   const openVersions = async (f: FileMeta) => {
     setBusy(true);
     try {
@@ -566,6 +593,7 @@ export function LibraryView({ userId, sessionToken, onChatWithFile, onChatWithFi
   const [renPattern, setRenPattern] = useState("");
   const [renStart, setRenStart] = useState(1);
   const [renBusy, setRenBusy] = useState(false);
+  const [mapOpen, setMapOpen] = useState(false);
   const [sumFile, setSumFile] = useState<FileMeta | null>(null);
   const [sumOne, setSumOne] = useState("");
   const [sumOneBusy, setSumOneBusy] = useState(false);
@@ -726,6 +754,9 @@ export function LibraryView({ userId, sessionToken, onChatWithFile, onChatWithFi
           </button>
           <button className="btn ghost" onClick={() => { const n = !dupOpen; setDupOpen(n); if (n) loadDups(); }} title="Find files with identical content">
             🧬 Duplicates
+          </button>
+          <button className="btn ghost" onClick={() => setMapOpen(true)} title="AI mind-map of this folder's concepts">
+            🕸 Mind-map
           </button>
           <button className="btn ghost" onClick={() => setNewFolderOpen(true)}>📁 New folder</button>
           <button className="btn ghost" disabled={busy} onClick={() => bulkRef.current?.click()}>⬆ Bulk upload</button>
@@ -1060,6 +1091,11 @@ export function LibraryView({ userId, sessionToken, onChatWithFile, onChatWithFi
         </table>
       )}
 
+      {/* AI mind-map modal */}
+      {mapOpen && (
+        <MindMap authToken={sessionToken} userId={userId} folder={folder} onClose={() => setMapOpen(false)} />
+      )}
+
       {/* one-tap AI summary modal */}
       {sumFile && (
         <Modal title={`✨ ${sumFile.name}`} onClose={() => setSumFile(null)}>
@@ -1114,6 +1150,9 @@ export function LibraryView({ userId, sessionToken, onChatWithFile, onChatWithFi
           <div className="row gap" style={{ marginTop: 12 }}>
             <button className="btn primary" disabled={busy} onClick={() => doShare(shareTarget, sharePass)}>
               {sharePass ? "Create protected link" : "Create public link"}
+            </button>
+            <button className="btn ghost" disabled={busy} onClick={() => doE2eeShare(shareTarget)} title="Encrypted in your browser — the server never sees the key">
+              🔒 Zero-knowledge link
             </button>
             <button className="btn ghost" onClick={() => { setShareTarget(null); setSharePass(""); }}>Cancel</button>
           </div>

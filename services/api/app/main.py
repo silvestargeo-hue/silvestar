@@ -863,6 +863,143 @@ async def _email_owner(user_id: str, message: str) -> None:
         pass
 
 
+# ------------------------------------------- Module 21: advanced trio ------
+@app.post("/api/v1/files/mindmap", tags=["files"])
+async def files_mindmap(request: Request, body: dict):
+    """AI mind-map of a folder: concepts as nodes, relations as edges."""
+    import hashlib
+    uid = await _uid_async(request)
+    folder = str((body or {}).get("folder", "")).strip("/")
+    idx = await file_store._user_index(uid)
+    parts = []
+    for p, m in idx.get("files", {}).items():
+        mf = (m.get("folder") or "").strip("/")
+        if folder and not (mf == folder or mf.startswith(folder + "/")):
+            continue
+        doc_id = "d-" + hashlib.sha256(f"{uid}:{p}".encode()).hexdigest()[:16]
+        doc = await db.fetch(doc_id)
+        if not doc or not doc.get("content"):
+            continue
+        parts.append(f"--- {p.rsplit('/', 1)[-1]}\n{str(doc.get('content'))[:2500]}")
+        if len(parts) >= 8:
+            break
+    if not parts:
+        raise HTTPException(404, "no indexed files in this folder")
+    res = await ai.summarize(
+        'Build a mind-map of the main concepts in these documents. Return STRICT JSON only: '
+        '{"nodes":[{"id":"lowercase-slug","label":"Short Label"}],'
+        '"edges":[["id-a","id-b","short relation"]]}. 6-10 nodes, 6-12 edges. '
+        'No markdown fences, JSON only.',
+        "\n\n".join(parts)[:12000],
+    )
+    import json as _j
+    import re as _re
+    raw = str(res.get("summary", ""))
+    m = _re.search(r"\{.*\}", raw, _re.S)
+    if not m:
+        raise HTTPException(502, "mind-map model returned no JSON")
+    try:
+        data = _j.loads(m.group(0))
+        nodes = [{"id": str(n.get("id"))[:40], "label": str(n.get("label"))[:40]}
+                 for n in (data.get("nodes") or [])][:14]
+        ids = {n["id"] for n in nodes}
+        edges = [[str(e[0])[:40], str(e[1])[:40], str(e[2])[:40]]
+                 for e in (data.get("edges") or [])
+                 if len(e) >= 2 and e[0] in ids and e[1] in ids][:16]
+        if len(nodes) < 3:
+            raise ValueError("too few nodes")
+    except Exception:
+        raise HTTPException(502, "mind-map JSON was malformed")
+    return {"folder": folder, "nodes": nodes, "edges": edges, "engine": res.get("engine", "")}
+
+
+class E2eeIn(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    mime: str = Field(default="application/octet-stream", max_length=60)
+    blob_b64: str = Field(min_length=8, max_length=30_000_000)
+    key_b64: str = Field(min_length=16, max_length=80)
+
+
+@app.post("/api/v1/files/e2ee", tags=["files"])
+async def e2ee_create(body: E2eeIn, request: Request):
+    """Zero-knowledge share: the client encrypts with a random AES-GCM key that
+    lives only in the link fragment. Server stores ciphertext + wrapped key."""
+    uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in required")
+    import base64 as _b64
+    try:
+        blob = _b64.b64decode(body.blob_b64)
+        key = _b64.b64decode(body.key_b64)
+    except Exception:
+        raise HTTPException(422, "invalid base64")
+    if len(key) not in (16, 24, 32):
+        raise HTTPException(422, "AES key must be 16/24/32 bytes")
+    from .core.security import encrypt as _sec_encrypt
+    wrapped = _sec_encrypt(body.key_b64, (settings.secret_key + "pad")[:32].encode())
+    rec = await file_store.e2ee_store(uid, body.name, body.mime, blob)
+    await file_store._kv_set(f"share:{rec['token']}:wk", {"wk": wrapped})
+    return {"token": rec["token"], "name": rec["name"]}
+
+
+@app.get("/api/v1/files/e2ee/{token}", tags=["files"])
+async def e2ee_meta(token: str):
+    m = await file_store.e2ee_meta(token)
+    if not m:
+        raise HTTPException(404, "not found")
+    return m
+
+
+@app.get("/api/v1/files/e2ee/{token}/blob", tags=["files"])
+async def e2ee_blob(token: str):
+    """Ciphertext + wrapped key. The fragment key (never sent to the server)
+    is what turns this into plaintext."""
+    got = await file_store.e2ee_fetch(token)
+    if not got:
+        raise HTTPException(404, "not found")
+    import base64 as _b64
+    wk = (await file_store._kv_get(f"share:{token}:wk") or {}).get("wk", "")
+    return {"blob_b64": _b64.b64encode(got["data"]).decode(),
+            "wk_b64": _b64.b64encode(wk.encode()).decode(),
+            "name": got["name"], "mime": got["mime"]}
+
+
+class PodcastIn(BaseModel):
+    text: str = Field(min_length=20, max_length=60_000)
+    title: str = Field(default="Silvestar Podcast", max_length=80)
+    seconds: int = Field(default=150, ge=30, le=300)
+
+
+@app.post("/api/v1/studio/podcast", tags=["studio"])
+async def studio_podcast(body: PodcastIn, request: Request):
+    """Two-host podcast SCRIPT (Groq). Played in-browser with alternating
+    speech-synthesis voices; script saved to Library/Podcasts."""
+    uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in required")
+    res = await ai.summarize(
+        f"Create a fun two-host podcast dialogue about this document. Hosts: MAYA (curious, "
+        f"asks questions) and LEO (expert, explains). Target ~{body.seconds} spoken seconds "
+        f"(about {int(body.seconds * 2.4)} words). Format STRICTLY as alternating lines: "
+        "'MAYA: ...' / 'LEO: ...'. No stage directions, no markdown, start with MAYA.",
+        body.text[:12000],
+    )
+    script = str(res.get("summary", "")).strip()
+    lines = []
+    for ln in script.splitlines():
+        ln = ln.strip().lstrip("-*• ")
+        if ":" in ln and ln.split(":", 1)[0].strip().upper() in ("MAYA", "LEO"):
+            lines.append(ln)
+    if len(lines) < 4:
+        raise HTTPException(502, "podcast model returned no usable dialogue")
+    fname = time.strftime("podcast-%Y%m%d-%H%M%S") + ".md"
+    content = (f"# {body.title}\n\nTwo-host script (MAYA & LEO). "
+               f"Open Studio > Podcast to play it with voices.\n\n" + "\n\n".join(lines))
+    saved = await file_store.upload(uid, fname, content.encode(), folder="Podcasts")
+    return {"lines": lines[:80], "file": saved["path"], "name": fname,
+            "engine": res.get("engine", "")}
+
+
 @app.get("/api/v1/files/summarize", tags=["files"])
 async def file_summarize(request: Request, path: str = Query(..., min_length=1)):
     """One-tap AI summary of a single Library file (indexed text)."""

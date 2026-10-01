@@ -22,10 +22,12 @@ import { UserPanel } from "@/components/UserPanel";
 import { AdminPanel } from "@/components/AdminPanel";
 import { Shell, type NavTab } from "@/components/Shell";
 import { CommandPalette, type Cmd } from "@/components/CommandPalette";
+import { decryptBytes } from "@/lib/e2ee";
+import { renderMarkdown } from "@/lib/kit";
 import { NotificationCenter, useNotificationCount } from "@/components/NotificationCenter";
 import { ShortcutsOverlay } from "@/components/ShortcutsOverlay";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { useOnline, useTheme, toast } from "@/lib/kit";
+import { useOnline, useTheme, toast, Modal } from "@/lib/kit";
 import "./lock.css";
 
 type Tab = "panel" | "ask" | "library" | "archive" | "vault" | "rooms" | "graph" | "skills" | "crew" | "studio" | "study" | "settings" | "guide" | "admin";
@@ -90,6 +92,7 @@ export default function Home() {
   const online = useOnline();
   const { count: notifCount, refresh: refreshNotifs } = useNotificationCount(user?.user_id || "anon");
   const [canInstall, setCanInstall] = useState(false);
+  const [e2eeDoc, setE2eeDoc] = useState<{ name: string; text: string } | null>(null);
   useEffect(() => {
     const t = setInterval(() => setCanInstall(!!deferredInstall), 1500);
     setTimeout(() => clearInterval(t), 20000);
@@ -124,6 +127,29 @@ export default function Home() {
     const t = sp.get("tab") as Tab | null;
     if (t && ["panel", "ask", "library", "archive", "vault", "rooms", "graph", "skills", "crew", "studio", "study", "settings", "guide", "admin"].includes(t)) {
       setTab(t);
+    }
+    // zero-knowledge share: /?e2ee=<token>#<key> — key never hits the server
+    const e2eeTok = sp.get("e2ee");
+    if (e2eeTok) {
+      const fragKey = window.location.hash.replace(/^#/, "");
+      window.history.replaceState({}, "", window.location.pathname);
+      (async () => {
+        try {
+          const APIB = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
+          const m = await fetch(`${APIB}/api/v1/files/e2ee/${encodeURIComponent(e2eeTok)}`);
+          if (!m.ok) throw new Error("link not found");
+          const meta = await m.json();
+          if (!fragKey) throw new Error("missing key in link fragment");
+          const b = await fetch(`${APIB}/api/v1/files/e2ee/${encodeURIComponent(e2eeTok)}/blob`);
+          if (!b.ok) throw new Error("blob not found");
+          const bj = await b.json();
+          const pt = await decryptBytes(fragKey, bj.blob_b64);
+          const text = new TextDecoder().decode(pt);
+          setE2eeDoc({ name: meta.name || "shared file", text });
+        } catch (e) {
+          toast(`🔒 Encrypted link: ${e instanceof Error ? e.message : "failed"}`, "err");
+        }
+      })();
     }
     // web clipper deep link: /?import=<text>&title=…&url=… (bookmarklet / mobile share)
     const imp = sp.get("import");
@@ -361,6 +387,19 @@ export default function Home() {
         {tab === "guide" && <ErrorBoundary><GuideView onNavigate={(id) => setTab(id as Tab)} /></ErrorBoundary>}
         {tab === "admin" && isAdmin && <ErrorBoundary><AdminPanel /></ErrorBoundary>}
       </Shell>
+
+      {e2eeDoc && (
+        <Modal title={`🔒 ${e2eeDoc.name} — decrypted in your browser`} onClose={() => setE2eeDoc(null)}>
+          <div className="muted small" style={{ marginBottom: 8 }}>
+            Decrypted locally with the key from the link fragment. The server only ever stored ciphertext.
+          </div>
+          <div style={{ maxHeight: "60vh", overflow: "auto" }}>{renderMarkdown(e2eeDoc.text)}</div>
+          <div className="row" style={{ marginTop: 12, justifyContent: "flex-end" }}>
+            <button className="btn ghost" onClick={() => { navigator.clipboard?.writeText(e2eeDoc.text); toast("Copied", "ok"); }}>📋 Copy</button>
+            <button className="btn primary" onClick={() => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([e2eeDoc.text], { type: "text/markdown" })); a.download = e2eeDoc.name; a.click(); }}>⬇ Download</button>
+          </div>
+        </Modal>
+      )}
 
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} commands={commands} />
       <NotificationCenter userId={user.user_id} open={notifOpen} onClose={() => setNotifOpen(false)} onChanged={() => refreshNotifs()} />
