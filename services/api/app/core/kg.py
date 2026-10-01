@@ -1,43 +1,43 @@
 """Module 31 — Knowledge Graph Brain.
 
-Harvests entities (people, organizations, places, projects, topics) and their
+Harvests entities (people, orgs, places, projects, topics) and their
 relationships out of the user's indexed Library files with one AI pass per
-file, merging them into the platform graph under a per-user namespace
-(node ids prefixed `u|<uid>|`). Powers the interactive map and connection
-queries like "how are X and Y connected?".
+file. Triples persist as docs in `kg:{user_id}` (kind=triple) — serverless
+safe — and power the interactive map and connection queries
+("how are X and Y connected?").
 """
 from __future__ import annotations
 
+import hashlib
 import json
+from collections import deque
 
 from .ai import ai
 from .db import db
 
 MAX_FILES = 10
 MAX_CHARS_EACH = 5000
-VALID_LABELS = {"person", "org", "place", "project", "topic", "event", "product", "other"}
+MAX_TRIPLES = 400
 
 
-class KgNode(dict):
-    pass
-
-
-class KgLink(dict):
-    pass
-
-
-def _ns(uid: str, name: str) -> str:
-    return f"u|{uid}|{name.strip().lower()[:60]}"
+def _triple_id(user_id: str, s: str, r: str, o: str) -> str:
+    return "tri-" + hashlib.sha1(f"{user_id}|{s.lower()}|{r}|{o.lower()}".encode()).hexdigest()[:16]
 
 
 async def harvest(user_id: str, max_files: int = MAX_FILES) -> dict:
-    """Scan the newest text files and merge extracted entities + relations
-    into the graph. Free, one Groq call per file."""
+    """Scan the newest text files and merge extracted triples. One AI call per
+    file; dedupe by (subject, relation, object)."""
     from .files import files as file_store
-    from .graph import graph
+
+    existing, _t = await db.list(f"kg:{user_id}", limit=MAX_TRIPLES)
+    have = {(r.get("meta") or {}).get("s", "").lower() for r in existing}
+    have_set: set[tuple[str, str, str]] = set()
+    for r in existing:
+        m = r.get("meta") or {}
+        have_set.add((str(m.get("s", "")).lower(), str(m.get("r", "")), str(m.get("o", "")).lower()))
 
     rows = (await file_store.list_files(user_id)).get("files", [])
-    scanned = merged_nodes = merged_edges = 0
+    scanned = added = 0
     for r in rows[:max_files]:
         mime = (r.get("mime") or "")
         if not any(mime.startswith(p) for p in ("text/", "application/json")) \
@@ -51,8 +51,8 @@ async def harvest(user_id: str, max_files: int = MAX_FILES) -> dict:
             continue
         res = await ai.summarize(
             "Extract knowledge-graph triples from this document. Return ONLY lines "
-            "in the strict format: SUBJECT :: RELATION (uppercase snake case) :: OBJECT\n"
-            "Label entities simply (e.g. 'Maya', 'Kochi', 'Bakery Project'). Max 12 lines, "
+            "in the strict format: SUBJECT :: RELATION (UPPER_SNAKE) :: OBJECT\n"
+            "Label entities simply ('Maya', 'Kochi', 'Bakery Project'). Max 12 lines, "
             "only real relations stated in the text. If nothing meaningful, return exactly: NONE",
             text,
         )
@@ -65,75 +65,110 @@ async def harvest(user_id: str, max_files: int = MAX_FILES) -> dict:
             if not s or not o or len(s) > 60 or len(o) > 60 or len(rel) > 30:
                 continue
             rel = rel.upper().replace(" ", "_")[:30]
-            await graph.merge_node(_ns(user_id, s), ["Entity"], {"name": s, "user": user_id})
-            await graph.merge_node(_ns(user_id, o), ["Entity"], {"name": o, "user": user_id})
-            await graph.merge_edge(_ns(user_id, s), rel, _ns(user_id, o), {"file": r["name"][:60]})
-            merged_edges += 1
-    return {"scanned": scanned, "edges_added": merged_edges,
-            "files_total": len(rows), "note": "entities merged under your namespace"}
+            key = (s.lower(), rel, o.lower())
+            if key in have_set:
+                continue
+            have_set.add(key)
+            await db.upsert_document(
+                _triple_id(user_id, s, rel, o), f"kg:{user_id}", f"{s} {rel} {o}"[:80],
+                json.dumps({"s": s[:60], "r": rel, "o": o[:60], "file": r["name"][:60]}),
+                meta={"kind": "triple", "s": s[:60], "r": rel, "o": o[:60]})
+            added += 1
+            if len(have_set) >= MAX_TRIPLES:
+                break
+    return {"scanned": scanned, "edges_added": added, "files_total": len(rows)}
 
 
 async def map_data(user_id: str) -> dict:
-    """Nodes + links under this user's namespace, for the interactive map."""
-    from .graph import graph
-    prefix = f"u|{user_id}|"
-    nodes: dict[str, KgNode] = {}
-    links: list[KgLink] = []
-    try:
-        for r in await graph.nodes_with_prefix(prefix):
-            nid = str(r.get("id", ""))
-            name = str((r.get("props") or {}).get("name") or nid.split("|")[-1])
-            nodes[nid] = {"id": nid, "name": name, "deg": 0}
-    except Exception:
-        pass
-    # edges: neighbors() per node (embedded engine keeps a global edge list)
-    for nid in list(nodes):
+    """Nodes + links for the interactive map."""
+    rows, _t = await db.list(f"kg:{user_id}", limit=MAX_TRIPLES)
+    nodes: dict[str, dict] = {}
+    links: list[dict] = []
+    for r in rows:
+        if (r.get("meta") or {}).get("kind") != "triple":
+            continue
         try:
-            for nb in await graph.neighbors(nid):
-                edge = nb.get("edge", "")
-                target = (nb.get("node") or {}).get("id", "")
-                if target in nodes:
-                    links.append({"source": nodes[nid]["name"], "target": nodes[target]["name"],
-                                  "rel": edge})
-                    nodes[nid]["deg"] += 1
-                    nodes[target]["deg"] += 1
+            t = json.loads(r.get("content") or "{}")
         except Exception:
             continue
+        s, rel, o = str(t.get("s", "")), str(t.get("r", "")), str(t.get("o", ""))
+        if not s or not o:
+            continue
+        nodes.setdefault(s, {"id": s, "name": s, "deg": 0})
+        nodes.setdefault(o, {"id": o, "name": o, "deg": 0})
+        links.append({"source": s, "target": o, "rel": rel,
+                      "file": str(t.get("file", ""))[:40]})
+        nodes[s]["deg"] += 1
+        nodes[o]["deg"] += 1
     return {"nodes": list(nodes.values()), "links": links}
 
 
+async def _load_triples_async(user_id: str) -> list[tuple[str, str, str]]:
+    rows, _t = await db.list(f"kg:{user_id}", limit=MAX_TRIPLES)
+    out = []
+    for r in rows:
+        if (r.get("meta") or {}).get("kind") != "triple":
+            continue
+        m = r.get("meta") or {}
+        out.append((str(m.get("s", "")), str(m.get("r", "")), str(m.get("o", ""))))
+    return out
+
+
 async def connect(user_id: str, source: str, target: str) -> dict:
-    """Find the shortest relationship path between two entities in the user's
-    namespace and explain it in plain language."""
-    from .graph import graph
-    src = _ns(user_id, source)
-    dst = _ns(user_id, target)
-    node_ids = await _all_nodes(user_id)
-    if src not in node_ids or dst not in node_ids:
+    """BFS shortest chain between two entities + AI explanation."""
+    src, dst = source.strip().lower(), target.strip().lower()
+    triples = await _load_triples_async(user_id)
+    adj: dict[str, list[tuple[str, str, str]]] = {}
+    names: dict[str, str] = {}
+    for s, r, o in triples:
+        adj.setdefault(s.lower(), []).append((s, r, o))
+        adj.setdefault(o.lower(), []).append((o, r, s))  # undirected
+        names[s.lower()] = s
+        names[o.lower()] = o
+    if src not in names or dst not in names:
         return {"found": False,
                 "reason": "one or both entities are not in your graph yet — run a harvest first",
-                "known_sample": [n.split("|")[-1] for n in node_ids[:12]]}
-    path = await graph.path(src, dst, max_depth=5)
-    if not path:
+                "known_sample": sorted(names.values())[:12]}
+    # BFS
+    q: deque[tuple[str, list[str], list[str]]] = deque([(src, [src], [])])
+    seen = {src}
+    chain_nodes: list[str] = []
+    chain_rels: list[str] = []
+    while q:
+        cur, path, rels = q.popleft()
+        if cur == dst:
+            chain_nodes, chain_rels = path, rels
+            break
+        for (s_name, r, o_name) in adj.get(cur, []):
+            nxt = o_name.lower()
+            if nxt not in seen:
+                seen.add(nxt)
+                q.append((nxt, path + [nxt], rels + [r]))
+    if not chain_nodes:
         return {"found": False, "reason": "no connection path found between these entities"}
-    names = [p.split("|")[-1] for p in path]
-    chain = " → ".join(names)
+    names_path = [names[p] for p in chain_nodes]
+    pretty = []
+    for i, nm in enumerate(names_path):
+        pretty.append(nm)
+        if i < len(chain_rels):
+            pretty.append(f"--[{chain_rels[i]}]-->")
+    chain = " ".join(pretty)
     expl = await ai.summarize(
         "Explain this knowledge-graph connection chain in 2-3 friendly sentences "
         "for the user. The names come from their own notes. Do not invent facts "
         "beyond restating the chain and its obvious meaning.",
         f"ENTITY CHAIN: {chain}",
     )
-    return {"found": True, "path": names, "chain": chain,
+    return {"found": True, "path": names_path, "chain": chain,
             "explanation": (expl.get("summary") or "").strip()[:600]}
 
 
-async def _all_nodes(user_id: str) -> list[str]:
-    """All node ids in this user's namespace."""
-    from .graph import graph
-    try:
-        rows = await graph.nodes_with_prefix(f"u|{user_id}|")
-        return [str(r.get("id", "")) for r in rows]
-    except Exception:
-        return []
-
+# ---------------------------------------------------------------- cleanup ---
+async def forget(user_id: str) -> int:
+    rows, _t = await db.list(f"kg:{user_id}", limit=MAX_TRIPLES)
+    n = 0
+    for r in rows:
+        if (r.get("meta") or {}).get("kind") == "triple":
+            await db.delete(r["id"])
+            n += 1
+    return n
