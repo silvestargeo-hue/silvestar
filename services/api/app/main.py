@@ -543,6 +543,10 @@ class SpaceIn(BaseModel):
     email: str = ""
 
 
+class SpaceEmailIn(BaseModel):
+    email: str = Field(min_length=3, max_length=120)
+
+
 @app.post("/api/v1/spaces", tags=["spaces"])
 async def space_create(body: SpaceIn, request: Request):
     uid = await _uid_async(request)
@@ -564,13 +568,13 @@ async def spaces_list(request: Request):
 
 
 @app.post("/api/v1/spaces/{name}/invite", tags=["spaces"])
-async def space_invite(name: str, body: SpaceIn, request: Request):
+async def space_invite(name: str, body: SpaceEmailIn, request: Request):
     uid = await _uid_async(request)
     return await spaces_svc.invite(name, body.email, uid)
 
 
 @app.post("/api/v1/spaces/{name}/remove", tags=["spaces"])
-async def space_remove(name: str, body: SpaceIn, request: Request):
+async def space_remove(name: str, body: SpaceEmailIn, request: Request):
     uid = await _uid_async(request)
     return await spaces_svc.remove_member(name, body.email, uid)
 
