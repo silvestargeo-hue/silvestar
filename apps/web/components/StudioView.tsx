@@ -158,6 +158,11 @@ export function StudioView({ authToken, userId }: { authToken: string; userId: s
   const [csvBusy, setCsvBusy] = useState(false);
   const csvRef = useRef<HTMLInputElement>(null);
 
+  const [csvText, setCsvText] = useState("");
+  const [dq, setDq] = useState("");
+  const [dans, setDans] = useState("");
+  const [dBusy, setDBusy] = useState(false);
+
   const authHeaders = (): Record<string, string> => (authToken ? { Authorization: `Bearer ${authToken}` } : {});
 
   const genImage = async () => {
@@ -200,6 +205,8 @@ export function StudioView({ authToken, userId }: { authToken: string; userId: s
     try {
       const text = await f.text();
       const { headers, rows } = parseCSV(text);
+      setCsvText(text);
+      setDans(""); setDq("");
       const specs = buildCharts(headers, rows);
       setCharts(specs);
       setCsvInfo(`${rows.length} rows · ${headers.length} columns`);
@@ -219,6 +226,25 @@ export function StudioView({ authToken, userId }: { authToken: string; userId: s
     } catch (e) {
       toast(String(e instanceof Error ? e.message : e), "err");
     } finally { setCsvBusy(false); }
+  };
+
+  const askData = async () => {
+    const q = dq.trim();
+    if (!q || dBusy || !csvText) return;
+    setDBusy(true); setDans("");
+    try {
+      const r = await fetch(`${API}/api/v1/studio/data-chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ q, csv: csvText }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.detail || `${r.status}`);
+      setDans(j.answer || "");
+      toast(t("csvDone"), "ok");
+    } catch (e) {
+      toast(String(e instanceof Error ? e.message : e), "err");
+    } finally { setDBusy(false); }
   };
 
   const card = { marginBottom: 14 };
@@ -286,6 +312,21 @@ export function StudioView({ authToken, userId }: { authToken: string; userId: s
         {insights && (
           <div style={{ marginTop: 10 }}>{renderMarkdown(insights)}</div>
         )}
+      </div>
+
+      {/* chat with data */}
+      <div className="card" style={card}>
+        <b>💬 {t("dcTitle")}</b>
+        <div className="hint">{csvText ? t("dcHint") : t("dcLoadFirst")}</div>
+        <div className="row">
+          <input value={dq} placeholder={t("dcPlaceholder")} disabled={!csvText || dBusy}
+            onChange={(e) => setDq(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && askData()} />
+          <button onClick={askData} disabled={!csvText || dBusy || !dq.trim()}>
+            {dBusy ? "⏳" : "💬 " + t("dcBtn")}
+          </button>
+        </div>
+        {dans && <div style={{ marginTop: 10 }}>{renderMarkdown(dans)}</div>}
       </div>
     </div>
   );

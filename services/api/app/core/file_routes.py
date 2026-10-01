@@ -15,6 +15,7 @@ import zipfile
 import io
 
 from .files import files
+from . import spaces as spaces_mod
 
 router = APIRouter(prefix="/api/v1/files", tags=["files"])
 
@@ -38,9 +39,57 @@ async def _uid_async(request: Request) -> str:
     return "anon"
 
 
+async def _session_async(request: Request) -> dict:
+    """{'uid': …, 'email': …} from a valid Bearer session; anon otherwise."""
+    authz = request.headers.get("authorization", "")
+    if authz.startswith("Bearer "):
+        try:
+            from .auth import auth as auth_svc
+
+            user = await auth_svc.validate_session(authz[7:])
+            if user:
+                return {"uid": str(user.get("user_id") or user.get("email") or "anon"),
+                        "email": str(user.get("email") or "")}
+        except Exception:
+            pass
+    return {"uid": "anon", "email": ""}
+
+
+async def _space_list_uid(request: Request, uid: str, folder: str) -> str:
+    """Shared-space listing: members may list `Space/<x>` from the owner's index.
+    Non-members with no access get 403 instead of a silent empty list."""
+    if not folder.startswith("Space/"):
+        return uid
+    s = await _session_async(request)
+    if not s["email"]:
+        raise HTTPException(401, "sign in to access shared spaces")
+    owner = await spaces_mod.space_owner_uid(s["email"], folder)
+    if not owner:
+        raise HTTPException(403, "no access to this space")
+    return owner
+
+
+async def _read_uid_for(request: Request, uid: str, path: str) -> str:
+    """Shared-space reads: `path` is a FULL stored path files/<owner>/Space/<x>/….
+    A verified member (or the owner) reads from the owner's subtree; anyone else
+    touching another user's path gets an explicit 403."""
+    parts = path.split("/")
+    if len(parts) >= 4 and parts[0] == "files" and parts[2] == "Space":
+        if parts[1] == uid:
+            return uid
+        s = await _session_async(request)
+        owner = (await spaces_mod.space_owner_uid(s["email"], f"Space/{parts[3]}")
+                 if s["email"] else None)
+        if owner and owner == parts[1]:
+            return owner
+        raise HTTPException(403, "no access to this file")
+    return uid
+
+
 @router.get("")
 async def list_files(request: Request, folder: str = "", prefix: str = ""):
     uid = await _uid_async(request)
+    uid = await _space_list_uid(request, uid, folder)
     return await files.list_files(uid, folder=folder, prefix=prefix)
 
 
@@ -82,7 +131,7 @@ async def upload_bulk(request: Request,
 @router.get("/download")
 async def download(request: Request, path: str = Query(...)):
     uid = await _uid_async(request)
-    got = await files.download(uid, path)
+    got = await files.download(await _read_uid_for(request, uid, path), path)
     if not got:
         raise HTTPException(404, "file not found")
     data, mime = got
@@ -98,7 +147,7 @@ async def download(request: Request, path: str = Query(...)):
 async def view(request: Request, path: str = Query(...)):
     """Inline view (browser PDF/image/text viewer) — same as download but inline."""
     uid = await _uid_async(request)
-    got = await files.download(uid, path)
+    got = await files.download(await _read_uid_for(request, uid, path), path)
     if not got:
         raise HTTPException(404, "file not found")
     data, mime = got

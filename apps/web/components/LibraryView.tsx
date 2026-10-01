@@ -83,6 +83,11 @@ export function LibraryView({ userId, sessionToken, onChatWithFile }: {
   const [urlOpen, setUrlOpen] = useState(false);
   const [urlVal, setUrlVal] = useState("");
   const [urlBusy, setUrlBusy] = useState(false);
+  const [spList, setSpList] = useState<{ name: string; role: string; folder: string }[]>([]);
+  const [spName, setSpName] = useState("");
+  const [spEmail, setSpEmail] = useState("");
+  const [spInviteTo, setSpInviteTo] = useState("");
+  const [spBusy, setSpBusy] = useState(false);
   const [design, setDesign] = useState<{ accent: string; view: "grid" | "list" }>(
     () => { try { return JSON.parse(localStorage.getItem("sv-library-design") || '{"accent":"#8a05ff","view":"grid"}'); } catch { return { accent: "#8a05ff", view: "grid" as const }; } }
   );
@@ -107,6 +112,52 @@ export function LibraryView({ userId, sessionToken, onChatWithFile }: {
   }, [folder, query, sessionToken, userId]);
 
   useEffect(() => { load(); setSelected(new Set()); }, [load]);
+
+  const loadSpaces = async () => {
+    try {
+      const r = await fetch(`${API}/api/v1/spaces`, { headers: authHeaders(sessionToken, userId) });
+      const j = await r.json();
+      setSpList(j.spaces || []);
+    } catch { /* panel stays empty */ }
+  };
+
+  const createSpace = async () => {
+    const n = spName.trim();
+    if (!n || spBusy) return;
+    setSpBusy(true);
+    try {
+      const r = await fetch(`${API}/api/v1/spaces`, {
+        method: "POST", headers: { "Content-Type": "application/json", ...authHeaders(sessionToken, userId) },
+        body: JSON.stringify({ name: n }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.detail || `${r.status}`);
+      toast(t("spCreated"), "ok");
+      setSpName("");
+      await loadSpaces();
+    } catch (e) {
+      toast(String(e instanceof Error ? e.message : e), "err");
+    } finally { setSpBusy(false); }
+  };
+
+  const inviteMember = async (space: string) => {
+    const em = spEmail.trim();
+    if (!em || spBusy) return;
+    setSpBusy(true);
+    try {
+      const r = await fetch(`${API}/api/v1/spaces/${encodeURIComponent(space)}/invite`, {
+        method: "POST", headers: { "Content-Type": "application/json", ...authHeaders(sessionToken, userId) },
+        body: JSON.stringify({ email: em }),
+      });
+      const j = await r.json();
+      if (!r.ok || j.ok === false) throw new Error(j.detail || j.reason || `${r.status}`);
+      toast(t("spInvited"), "ok");
+      setSpEmail(""); setSpInviteTo("");
+      await loadSpaces();
+    } catch (e) {
+      toast(String(e instanceof Error ? e.message : e), "err");
+    } finally { setSpBusy(false); }
+  };
 
   // web-clipper handoff: /?import=… deep link stashes a payload in localStorage
   useEffect(() => {
@@ -498,6 +549,39 @@ export function LibraryView({ userId, sessionToken, onChatWithFile }: {
       {uploading && <div className="muted">Uploading…</div>}
 
       {/* web clipper helper */}
+      <details className="card" style={{ marginBottom: 12 }} onToggle={(e) => { if ((e.target as HTMLDetailsElement).open) loadSpaces(); }}>
+        <summary style={{ cursor: "pointer" }}>👥 {t("spTitle")}</summary>
+        <div className="hint" style={{ marginTop: 6 }}>{t("spHint")}</div>
+        <div className="row" style={{ marginTop: 8 }}>
+          <input className="input" placeholder={t("spNamePh")} value={spName} maxLength={40}
+            onChange={(e) => setSpName(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && createSpace()} style={{ width: 180 }} />
+          <button className="btn ghost" disabled={spBusy || !spName.trim()} onClick={createSpace}>➕ {t("spCreate")}</button>
+        </div>
+        {spInviteTo && (
+          <div className="row" style={{ marginTop: 8 }}>
+            <span className="small">✉ {spInviteTo}:</span>
+            <input className="input" placeholder={t("spEmailPh")} value={spEmail} type="email"
+              onChange={(e) => setSpEmail(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && inviteMember(spInviteTo)} style={{ width: 200 }} />
+            <button className="btn ghost" disabled={spBusy || !spEmail.trim()} onClick={() => inviteMember(spInviteTo)}>{t("spInvite")}</button>
+            <button className="btn ghost" onClick={() => setSpInviteTo("")}>✕</button>
+          </div>
+        )}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
+          {spList.length === 0 && <span className="muted small">{t("spNone")}</span>}
+          {spList.map((s) => (
+            <span key={s.folder} className="folder-chip" style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+              <button className="link" onClick={() => { setFolder(s.folder); }}>{s.name}</button>
+              <span className="muted small">{s.role === "owner" ? t("spOwner") : t("spMember")}</span>
+              {s.role === "owner" && spInviteTo !== s.name && (
+                <button className="link" onClick={() => setSpInviteTo(s.name)} title={t("spInvite")}>✉</button>
+              )}
+            </span>
+          ))}
+        </div>
+      </details>
+
       <details className="card" style={{ marginBottom: 12 }}>
         <summary style={{ cursor: "pointer" }}>✂️ Web clipper — save any page into this Library</summary>
         <div className="hint" style={{ marginTop: 6 }}>

@@ -94,6 +94,36 @@ async def my_spaces(uid: str, email: str) -> dict:
     return {"spaces": sorted(spaces.values(), key=lambda s: s["name"])}
 
 
+async def space_owner_uid(email: str, folder: str) -> str | None:
+    """Owner's uid when `email` may READ folder `Space/<x>` (owner or member); else None.
+    Used by file routes to serve shared-space files from the owner's subtree."""
+    parts = folder.strip("/").split("/")
+    if len(parts) != 2 or parts[0] != "Space" or not parts[1]:
+        return None
+    doc = await db.fetch("sp-" + parts[1])
+    if not doc:
+        return None
+    try:
+        content = json.loads(doc.get("content") or "{}")
+    except Exception:
+        return None
+    space_name = content.get("name")
+    owner_uid = content.get("owner")
+    if not space_name or not owner_uid:
+        return None
+    rows, _t = await db.list("spaces", limit=200)
+    for r in rows:
+        if (r.get("meta") or {}).get("kind") != "member":
+            continue
+        try:
+            c = json.loads(r.get("content") or "{}")
+        except Exception:
+            continue
+        if c.get("space") == space_name and c.get("email") == str(email).lower():
+            return str(owner_uid)
+    return None
+
+
 async def can_read_folder(uid: str, email: str, folder: str) -> bool:
     """True when folder is Space/<x>/… and the user is a member of Space x."""
     parts = folder.strip("/").split("/")

@@ -1,6 +1,7 @@
 "use client";
 
 /** Home screen v2 — hero greeting, live stat tiles, one-tap quick actions,
+ *  customizable dashboard widgets (study due, shared spaces, crew reports),
  *  and a getting-started card. Everything is real data from the API. */
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
@@ -15,8 +16,34 @@ type Stats = {
 };
 
 type FileStats = { files: number; folders: number; bytes: number; indexed: number };
+type DeckRow = { name: string; cards: number; due: number };
+type SpaceRow = { name: string; role: string; folder: string };
+type CrewFile = { name: string; path: string; uploaded: number };
 
 const API = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
+
+const WIDGETS = ["tiles", "quick", "recent", "study", "spaces", "crew"] as const;
+type WidgetId = (typeof WIDGETS)[number];
+const WIDGET_LABELS: Record<WidgetId, string> = {
+  tiles: "📊 Stat tiles",
+  quick: "⚡ Quick actions",
+  recent: "🕒 Recent archive",
+  study: "🃏 Study due",
+  spaces: "👥 Shared spaces",
+  crew: "👥 Crew reports",
+};
+const DEFAULT_WIDGETS: WidgetId[] = ["tiles", "quick", "recent", "study", "spaces", "crew"];
+const WKEY = "sv-widgets";
+
+function loadWidgets(): WidgetId[] {
+  try {
+    const raw = localStorage.getItem(WKEY);
+    if (!raw) return DEFAULT_WIDGETS;
+    const arr = JSON.parse(raw) as string[];
+    const clean = arr.filter((w): w is WidgetId => (WIDGETS as readonly string[]).includes(w));
+    return clean.length ? clean : DEFAULT_WIDGETS;
+  } catch { return DEFAULT_WIDGETS; }
+}
 
 function fmtBytes(n: number): string {
   if (!n) return "0 B";
@@ -37,17 +64,38 @@ export function UserPanel({ userId, authToken, sessionToken, userName, onNavigat
 }) {
   const [stats, setStats] = useState<Stats | null>(null);
   const [fstats, setFstats] = useState<FileStats | null>(null);
+  const [decks, setDecks] = useState<DeckRow[]>([]);
+  const [spaces, setSpaces] = useState<SpaceRow[]>([]);
+  const [crewFiles, setCrewFiles] = useState<CrewFile[]>([]);
+  const [widgets, setWidgets] = useState<WidgetId[]>(DEFAULT_WIDGETS);
+  const [customize, setCustomize] = useState(false);
   const { t } = useI18n();
+
+  useEffect(() => { setWidgets(loadWidgets()); }, []);
+
+  const authHeaders = useCallback((): Record<string, string> => (
+    authToken ? { Authorization: `Bearer ${authToken}` } : { "x-silvestar-user": userId }
+  ), [authToken, userId]);
 
   const load = useCallback(async () => {
     try { setStats(await api.meStats(userId, sessionToken)); } catch { setStats(null); }
     try {
-      const r = await fetch(`${API}/api/v1/files/stats`, {
-        headers: authToken ? { Authorization: `Bearer ${authToken}` } : { "x-silvestar-user": userId },
-      });
+      const r = await fetch(`${API}/api/v1/files/stats`, { headers: authHeaders() });
       if (r.ok) setFstats(await r.json());
     } catch { setFstats(null); }
-  }, [userId, sessionToken]);
+    try {
+      const r = await fetch(`${API}/api/v1/study/decks`, { headers: authHeaders() });
+      if (r.ok) setDecks(((await r.json()).decks || []) as DeckRow[]);
+    } catch { setDecks([]); }
+    try {
+      const r = await fetch(`${API}/api/v1/spaces`, { headers: authHeaders() });
+      if (r.ok) setSpaces(((await r.json()).spaces || []) as SpaceRow[]);
+    } catch { setSpaces([]); }
+    try {
+      const r = await fetch(`${API}/api/v1/files?folder=Crew-Reports`, { headers: authHeaders() });
+      if (r.ok) setCrewFiles(((await r.json()).files || []) as CrewFile[]);
+    } catch { setCrewFiles([]); }
+  }, [userId, sessionToken, authHeaders]);
 
   useEffect(() => {
     load();
@@ -55,7 +103,15 @@ export function UserPanel({ userId, authToken, sessionToken, userName, onNavigat
     return () => clearInterval(t);
   }, [load]);
 
+  const toggleWidget = (w: WidgetId) => {
+    const next = widgets.includes(w) ? widgets.filter((x) => x !== w) : [...widgets, w];
+    setWidgets(next);
+    try { localStorage.setItem(WKEY, JSON.stringify(next)); } catch { /* ignore */ }
+  };
+
   const trend = (n: number) => Array.from({ length: 10 }, (_, i) => n * 0.55 + i * 1.3 + Math.sin(i * 2.1) * 1.8);
+
+  const dueDecks = decks.filter((d) => d.due > 0);
 
   return (
     <div>
@@ -67,67 +123,138 @@ export function UserPanel({ userId, authToken, sessionToken, userName, onNavigat
         <div className="home-hero-actions">
           <button className="btn primary" onClick={() => onNavigate("ask")}>🤖 Ask Silvestar</button>
           <button className="btn ghost" onClick={() => onNavigate("library")}>🗂 Open Library</button>
+          <button className="btn ghost" title="Show or hide dashboard widgets" onClick={() => setCustomize(!customize)}>
+            {customize ? "✕" : "⚙"} Widgets
+          </button>
         </div>
       </div>
 
-      <div className="tile-grid">
-        <StatTile icon="🗂" label="Library files" value={fstats ? fstats.files : "—"}
-          sub={fstats ? `${fmtBytes(fstats.bytes)} · ${fstats.indexed} AI-indexed` : "your uploads"}
-          trend={trend(fstats?.files ?? 3)} accent="var(--accent2)" />
-        <StatTile icon="📚" label="Archive docs" value={stats?.archive_documents ?? "—"}
-          sub="knowledge library" trend={trend(stats?.archive_documents ?? 5)} accent="var(--accent)" />
-        <StatTile icon="🔒" label="Vault docs" value={stats ? (stats.vault_unlocked ? stats.vault_documents : "🔒") : "—"}
-          sub={stats?.vault_unlocked ? "unlocked" : "locked"} trend={trend(stats?.vault_documents ?? 2)} accent="var(--warn)" />
-        <StatTile icon="🤖" label="Silvestar AI" value={stats?.ai.reachable ? "online" : "—"}
-          sub={stats?.ai.assistant ?? ""} trend={trend(6)} accent="var(--ok)" />
-      </div>
+      {customize && (
+        <div className="card" style={{ marginBottom: 14 }}>
+          <h2>⚙ Dashboard widgets</h2>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 14 }}>
+            {WIDGETS.map((w) => (
+              <label key={w} style={{ display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }}>
+                <input type="checkbox" checked={widgets.includes(w)} onChange={() => toggleWidget(w)} />
+                {WIDGET_LABELS[w]}
+              </label>
+            ))}
+          </div>
+          <div className="hint" style={{ marginTop: 8 }}>Your choice is saved on this device.</div>
+        </div>
+      )}
+
+      {widgets.includes("tiles") && (
+        <div className="tile-grid">
+          <StatTile icon="🗂" label="Library files" value={fstats ? fstats.files : "—"}
+            sub={fstats ? `${fmtBytes(fstats.bytes)} · ${fstats.indexed} AI-indexed` : "your uploads"}
+            trend={trend(fstats?.files ?? 3)} accent="var(--accent2)" />
+          <StatTile icon="📚" label="Archive docs" value={stats?.archive_documents ?? "—"}
+            sub="knowledge library" trend={trend(stats?.archive_documents ?? 5)} accent="var(--accent)" />
+          <StatTile icon="🔒" label="Vault docs" value={stats ? (stats.vault_unlocked ? stats.vault_documents : "🔒") : "—"}
+            sub={stats?.vault_unlocked ? "unlocked" : "locked"} trend={trend(stats?.vault_documents ?? 2)} accent="var(--warn)" />
+          <StatTile icon="🤖" label="Silvestar AI" value={stats?.ai.reachable ? "online" : "—"}
+            sub={stats?.ai.assistant ?? ""} trend={trend(6)} accent="var(--ok)" />
+        </div>
+      )}
+
+      {(widgets.includes("study") || widgets.includes("spaces") || widgets.includes("crew")) && (
+        <div className="grid2" style={{ marginBottom: 14 }}>
+          {widgets.includes("study") && (
+            <div className="card">
+              <h2>🃏 Study due</h2>
+              {dueDecks.length ? dueDecks.slice(0, 4).map((d) => (
+                <div key={d.name} className="hit">
+                  <div className="t">🃏 {d.name}</div>
+                  <div className="muted small">{d.due} due · {d.cards} cards</div>
+                </div>
+              )) : (
+                <div className="hint">Nothing due — {decks.length ? "all caught up!" : "no decks yet."}</div>
+              )}
+              <button className="btn ghost" style={{ marginTop: 8 }} onClick={() => onNavigate("study")}>Open Study</button>
+            </div>
+          )}
+          {widgets.includes("spaces") && (
+            <div className="card">
+              <h2>👥 Shared spaces</h2>
+              {spaces.length ? spaces.slice(0, 4).map((s) => (
+                <div key={s.folder} className="hit">
+                  <div className="t">👥 {s.name}</div>
+                  <div className="muted small">{s.role}</div>
+                </div>
+              )) : (
+                <div className="hint">No spaces yet — create one in Library.</div>
+              )}
+              <button className="btn ghost" style={{ marginTop: 8 }} onClick={() => onNavigate("library")}>Open Library</button>
+            </div>
+          )}
+          {widgets.includes("crew") && (
+            <div className="card">
+              <h2>👥 Crew reports</h2>
+              {crewFiles.length ? crewFiles.slice(0, 4).map((f) => (
+                <div key={f.path} className="hit">
+                  <div className="t">📄 {f.name}</div>
+                  <div className="muted small">{f.uploaded ? new Date(f.uploaded * 1000).toLocaleDateString() : ""}</div>
+                </div>
+              )) : (
+                <div className="hint">No reports yet — run the Crew.</div>
+              )}
+              <button className="btn ghost" style={{ marginTop: 8 }} onClick={() => onNavigate("crew")}>Open Crew</button>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="grid2">
-        <div className="card">
-          <h2>⚡ {t("quickActions")}</h2>
-          <div className="qa-grid">
-            <button className="qa" onClick={() => onNavigate("ask")}>
-              <span className="qa-ic">🤖</span><span className="qa-t">Ask AI</span>
-              <span className="qa-d">Answers from your docs</span>
-            </button>
-            <button className="qa" onClick={() => onNavigate("library")}>
-              <span className="qa-ic">📤</span><span className="qa-t">Upload files</span>
-              <span className="qa-d">PDF, Word, images…</span>
-            </button>
-            <button className="qa" onClick={() => onNavigate("archive")}>
-              <span className="qa-ic">📚</span><span className="qa-t">Archive</span>
-              <span className="qa-d">Search everything</span>
-            </button>
-            <button className="qa" onClick={() => onNavigate("vault")}>
-              <span className="qa-ic">🔒</span><span className="qa-t">Vault</span>
-              <span className="qa-d">AES-256 private docs</span>
-            </button>
-            <button className="qa" onClick={() => onNavigate("rooms")}>
-              <span className="qa-ic">🎙</span><span className="qa-t">Rooms</span>
-              <span className="qa-d">Live voice & chat</span>
-            </button>
-            <button className="qa" onClick={() => onNavigate("graph")}>
-              <span className="qa-ic">🕸</span><span className="qa-t">Graph</span>
-              <span className="qa-d">See connections</span>
-            </button>
+        {widgets.includes("quick") && (
+          <div className="card">
+            <h2>⚡ {t("quickActions")}</h2>
+            <div className="qa-grid">
+              <button className="qa" onClick={() => onNavigate("ask")}>
+                <span className="qa-ic">🤖</span><span className="qa-t">Ask AI</span>
+                <span className="qa-d">Answers from your docs</span>
+              </button>
+              <button className="qa" onClick={() => onNavigate("library")}>
+                <span className="qa-ic">📤</span><span className="qa-t">Upload files</span>
+                <span className="qa-d">PDF, Word, images…</span>
+              </button>
+              <button className="qa" onClick={() => onNavigate("archive")}>
+                <span className="qa-ic">📚</span><span className="qa-t">Archive</span>
+                <span className="qa-d">Search everything</span>
+              </button>
+              <button className="qa" onClick={() => onNavigate("vault")}>
+                <span className="qa-ic">🔒</span><span className="qa-t">Vault</span>
+                <span className="qa-d">AES-256 private docs</span>
+              </button>
+              <button className="qa" onClick={() => onNavigate("rooms")}>
+                <span className="qa-ic">🎙</span><span className="qa-t">Rooms</span>
+                <span className="qa-d">Live voice & chat</span>
+              </button>
+              <button className="qa" onClick={() => onNavigate("graph")}>
+                <span className="qa-ic">🕸</span><span className="qa-t">Graph</span>
+                <span className="qa-d">See connections</span>
+              </button>
+            </div>
           </div>
-        </div>
+        )}
 
-        <div className="card">
-          <h2>🕒 {t("recentArchive")}</h2>
-          {stats?.recent_archive.length ? (
-            stats.recent_archive.map((d) => (
-              <div key={d.id} className="hit">
-                <div className="t">📄 {d.title}</div>
-              </div>
-            ))
-          ) : (
-            <div className="hint">Nothing published yet — add documents from the Archive tab.</div>
-          )}
-          <div className="notice" style={{ marginTop: 10 }}>
-            💡 Tip: press <b>Ctrl+K</b> anywhere to jump between sections, or <b>?</b> for all shortcuts.
+        {widgets.includes("recent") && (
+          <div className="card">
+            <h2>🕒 {t("recentArchive")}</h2>
+            {stats?.recent_archive.length ? (
+              stats.recent_archive.map((d) => (
+                <div key={d.id} className="hit">
+                  <div className="t">📄 {d.title}</div>
+                </div>
+              ))
+            ) : (
+              <div className="hint">Nothing published yet — add documents from the Archive tab.</div>
+            )}
+            <div className="notice" style={{ marginTop: 10 }}>
+              💡 Tip: press <b>Ctrl+K</b> anywhere to jump between sections, or <b>?</b> for all shortcuts.
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );
