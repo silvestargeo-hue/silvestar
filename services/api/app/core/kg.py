@@ -125,10 +125,24 @@ async def connect(user_id: str, source: str, target: str) -> dict:
         adj.setdefault(o.lower(), []).append((o, r, s))  # undirected
         names[s.lower()] = s
         names[o.lower()] = o
-    if src not in names or dst not in names:
+    def resolve(q: str) -> str | None:
+        q = q.strip().lower()
+        if q in names:
+            return q
+        qn = q.replace("_", " ")
+        if qn in names:
+            return qn
+        for k in names:
+            if qn in k or k.replace("_", " ") in qn:
+                return k
+        return None
+
+    src_r, dst_r = resolve(src), resolve(dst)
+    if not src_r or not dst_r:
         return {"found": False,
                 "reason": "one or both entities are not in your graph yet — run a harvest first",
                 "known_sample": sorted(names.values())[:12]}
+    src, dst = src_r, dst_r
     # BFS
     q: deque[tuple[str, list[str], list[str]]] = deque([(src, [src], [])])
     seen = {src}
