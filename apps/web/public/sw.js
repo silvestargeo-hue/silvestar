@@ -1,5 +1,5 @@
 /* Silvestar service worker — app-shell caching, offline support. */
-const CACHE = "silvestar-v2";
+const CACHE = "silvestar-v3";
 const SHELL = ["/", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png"];
 
 self.addEventListener("install", (e) => {
@@ -18,6 +18,20 @@ self.addEventListener("fetch", (e) => {
   if (e.request.method !== "GET") return;
   // never cache cross-origin API traffic
   if (url.origin !== self.location.origin) return;
+  // navigations: network-first, fall back to the cached app shell so the app
+  // still opens with no network
+  if (e.request.mode === "navigate") {
+    e.respondWith(
+      fetch(e.request)
+        .then((res) => {
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put("/", copy)).catch(() => {});
+          return res;
+        })
+        .catch(() => caches.match("/").then((hit) => hit || Response.error()))
+    );
+    return;
+  }
   e.respondWith(
     fetch(e.request)
       .then((res) => {

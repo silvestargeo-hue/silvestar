@@ -19,7 +19,7 @@ import time
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, File, Header, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Header, HTTPException, Query, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -540,6 +540,39 @@ async def study_deck_delete(deck: str, request: Request):
     return await study_svc.delete_deck(uid, deck)
 
 
+# ------------------------------------------------- deck exchange ------------
+@app.get("/api/v1/study/decks/{deck}/export", tags=["study"])
+async def study_deck_export(deck: str, request: Request):
+    """Download a deck as a portable JSON file (share, back up, move devices)."""
+    uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in required")
+    payload = await study_svc.export_deck(uid, deck)
+    import json as _j
+    import urllib.parse as _up
+    safe = _re_sub(r"[^A-Za-z0-9]+", "-", deck).strip("-") or "deck"
+    body = _j.dumps(payload, ensure_ascii=False, indent=1)
+    return Response(
+        content=body,
+        media_type="application/json",
+        headers={"Content-Disposition":
+                 f"attachment; filename=deck-{safe[:40]}.json"},
+    )
+
+
+@app.post("/api/v1/study/decks/import", tags=["study"])
+async def study_deck_import(request: Request, deck: str = Query(..., min_length=1, max_length=60),
+                            payload: dict = None):
+    """Import a deck: POST the exported JSON as body (or {text: 'q :: a\n…'}
+    for plain 'front :: back' lines). Duplicates are skipped."""
+    uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in required")
+    if not isinstance(payload, dict):
+        raise HTTPException(422, "JSON body required")
+    return await study_svc.import_deck(uid, deck, payload)
+
+
 # -------------------------------------------------- Module 18: Spaces -------
 class SpaceIn(BaseModel):
     name: str = Field(min_length=2, max_length=40)
@@ -653,8 +686,12 @@ async def skills_stats(request: Request):
 
 @app.post("/api/v1/skills/auto-install", tags=["skills"])
 async def skills_auto_install(request: Request):
-    await _require_user(request)
     """Daily GitHub harvest: install a fresh batch of free AI skills from top repos."""
+    # platform cron (cron key) OR any signed-in user (the Skills gallery button)
+    try:
+        await _require_cron(request)
+    except HTTPException:
+        await _require_user(request)
     await _uid_async(request)
     return await skills_svc.auto_install_skills()
 
@@ -731,7 +768,7 @@ async def crew_jobs_delete(job_id: str, request: Request):
 
 @app.post("/api/v1/crew/jobs/tick", tags=["crew"])
 async def crew_jobs_tick(request: Request):
-    await _require_admin(request)
+    await _require_cron(request)
     """Run every scheduled crew job that is due. Called daily by the platform
     cron (or manually); results are saved into each owner's Library under
     Crew-Reports/ so they show up in Ask too."""
@@ -791,9 +828,147 @@ def _re_sub(pat: str, rep: str, s: str) -> str:
     return _re.sub(pat, rep, s)
 
 
+def _require_cron(request: Request) -> None:
+    """Auth for platform cron/automation endpoints: the shared platform cron
+    key OR an admin key passes. GitHub Actions workflows send the key via the
+    CRON_KEY repo secret so scheduled jobs no longer 401/403."""
+    key = request.headers.get("x-cron-key", "")
+    if key and settings.platform_cron_key and hmac.compare_digest(
+            key.encode(), settings.platform_cron_key.encode()):
+        return
+    try:
+        await _require_admin(request)
+        return
+    except HTTPException:
+        pass
+    raise HTTPException(403, "cron key or admin key required")
+
+
+# --------------------------------------- Module 22: research agent jobs -----
+class ResearchJobIn(BaseModel):
+    topic: str = Field(min_length=4, max_length=300)
+    lang: str = ""
+    interval_days: int = Field(7, ge=1, le=30)
+
+
+def _rjob_id(uid: str, topic: str) -> str:
+    return "rj-" + _hashlib.sha1((uid + "|" + topic.lower()).encode()).hexdigest()[:14]
+
+
+@app.post("/api/v1/research/jobs", tags=["research"])
+async def research_job_create(body: ResearchJobIn, request: Request):
+    """Schedule a recurring AI research agent: every interval it researches the
+    topic on the free AI chain and files a fresh report into Library →
+    Research/. Free, self-scheduling."""
+    uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in required")
+    import json as _j
+    import time as _t
+    rec = {"topic": body.topic, "lang": body.lang,
+           "interval_days": body.interval_days,
+           "created": int(_t.time()), "last_run": 0, "runs": 0}
+    jid = _rjob_id(uid, body.topic)
+    await db.upsert_document(jid, f"research-jobs:{uid}", body.topic[:80],
+                             _j.dumps(rec), meta={"kind": "research-job"})
+    reg_id = "rreg-" + _hashlib.sha1(uid.encode()).hexdigest()[:12]
+    await db.upsert_document(reg_id, "research-jobs-registry", uid,
+                             f"research-jobs:{uid}", meta={"kind": "research-jobs-lib"})
+    return {"id": jid, **rec}
+
+
+@app.get("/api/v1/research/jobs", tags=["research"])
+async def research_jobs_list(request: Request):
+    uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in required")
+    import json as _j
+    hits = await db.search(f"research-jobs:{uid}", " ", limit=50)
+    jobs = []
+    for h in hits:
+        if (h.get("meta") or {}).get("kind") != "research-job":
+            continue
+        try:
+            rec = _j.loads(h.get("content") or "{}")
+        except Exception:
+            continue
+        rec["id"] = h["id"]
+        jobs.append(rec)
+    return {"jobs": jobs, "total": len(jobs)}
+
+
+@app.delete("/api/v1/research/jobs/{job_id}", tags=["research"])
+async def research_job_delete(job_id: str, request: Request):
+    uid = await _uid_async(request)
+    doc = await db.fetch(job_id)
+    if not doc or doc.get("library") != f"research-jobs:{uid}":
+        raise HTTPException(404, "job not found")
+    await db.delete(job_id)
+    return {"deleted": True}
+
+
+@app.post("/api/v1/research/jobs/tick", tags=["research"])
+async def research_jobs_tick(request: Request):
+    """Run every due research job: research → report → Library/Research/.
+    Called by the platform cron (daily) with the cron key."""
+    await _require_cron(request)
+    import json as _j
+    import time as _t
+    now = int(_t.time())
+    ran, skipped = [], 0
+    reg, _r = await db.list("research-jobs-registry", limit=200, offset=0)
+    for d in reg:
+        lib = (d.get("snippet") or "").strip()
+        if not lib.startswith("research-jobs:"):
+            continue
+        hits = await db.search(lib, " ", limit=50)
+        for h in hits:
+            if (h.get("meta") or {}).get("kind") != "research-job":
+                continue
+            full = await db.fetch(h["id"])
+            try:
+                rec = _j.loads((full or {}).get("content") or "{}")
+            except Exception:
+                continue
+            interval = int(rec.get("interval_days", 7)) * 86400
+            if now - int(rec.get("last_run") or 0) < interval:
+                skipped += 1
+                continue
+            owner = lib.split(":", 1)[1]
+            try:
+                topic = rec["topic"]
+                prompt = (
+                    "You are a research agent. Research the topic below and write a "
+                    "concise but complete markdown report with: an executive summary, "
+                    "key findings (bulleted), notable numbers or dates where relevant, "
+                    "risks/limitations, and a short recommendation section. Use ONLY "
+                    "your own knowledge; be factual; flag uncertainty."
+                )
+                res = await ai.summarize(prompt, f"TOPIC: {topic}")
+                report = res.get("summary") or ""
+                if not report:
+                    raise RuntimeError("empty report")
+                safe = _re_sub(r"[^A-Za-z0-9]+", "-", topic[:40]).strip("-") or "report"
+                fname = f"research-{safe[:40]}-{_t.strftime('%Y%m%d', _t.gmtime(now))}.md"
+                md = (f"# 🔬 {topic}\n\n_Weekly AI research report — auto-generated by "
+                      f"your research agent on {_t.strftime('%Y-%m-%d', _t.gmtime(now))}. "
+                      f"Run #{int(rec.get('runs', 0)) + 1}_\n\n{report}\n")
+                await file_store.upload(owner, fname, md.encode(), folder="Research")
+                rec["last_run"] = now
+                rec["runs"] = int(rec.get("runs", 0)) + 1
+                await db.upsert_document(h["id"], lib, topic[:80], _j.dumps(rec),
+                                         meta={"kind": "research-job"})
+                ran.append({"job": h["id"], "owner": owner, "file": fname})
+                await _notify(owner, f"🔬 Research report ready: {topic[:60]} → Research/{fname}")
+                await _email_owner(owner, f"Your weekly research report on '{topic[:60]}' is ready in Library → Research/{fname}")
+            except Exception as e:
+                ran.append({"job": h["id"], "owner": owner, "error": str(e)[:120]})
+    return {"ran": ran, "skipped": skipped, "count": len(ran)}
+
+
 @app.post("/api/v1/digest/weekly/tick", tags=["user"])
 async def digest_weekly_tick(request: Request):
-    await _require_admin(request)
+    await _require_cron(request)
     """Weekly digest: for every account, summarize the week's new Library files
     and archive docs into a notification (email when the address is allowed).
     Triggered by the weekly cron."""

@@ -23,6 +23,7 @@ import { AdminPanel } from "@/components/AdminPanel";
 import { Shell, type NavTab } from "@/components/Shell";
 import { CommandPalette, type Cmd } from "@/components/CommandPalette";
 import { decryptBytes } from "@/lib/e2ee";
+import { initOfflineSync, queueSize } from "@/lib/offline";
 import { renderMarkdown } from "@/lib/kit";
 import { NotificationCenter, useNotificationCount } from "@/components/NotificationCenter";
 import { ShortcutsOverlay } from "@/components/ShortcutsOverlay";
@@ -90,6 +91,13 @@ export default function Home() {
   const [landingSignup, setLandingSignup] = useState(false); // CTA target mode
   const { theme, toggle: toggleTheme } = useTheme();
   const online = useOnline();
+  const [pendingSync, setPendingSync] = useState(0);
+  useEffect(() => {
+    initOfflineSync((n) => { if (n > 0) toast(`🌐 Back online — synced ${n} queued change${n > 1 ? "s" : ""}`, "ok"); });
+    setPendingSync(queueSize());
+    const t = setInterval(() => setPendingSync(queueSize()), 5000); // badge refresh
+    return () => clearInterval(t);
+  }, []);
   const { count: notifCount, refresh: refreshNotifs } = useNotificationCount(user?.user_id || "anon");
   const [canInstall, setCanInstall] = useState(false);
   const [e2eeDoc, setE2eeDoc] = useState<{ name: string; text: string } | null>(null);
@@ -271,7 +279,7 @@ export default function Home() {
         headerExtra={
           <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
             <button className="mini ghost bell" onClick={() => setNotifOpen(true)} aria-label={`Notifications (${notifCount}) · due reminders (${remCount})`}>
-              🔔{notifCount > 0 && <span className="dot">{notifCount}</span>}{remCount > 0 && <span className="dot" style={{ background: "var(--warn, #d97706)" }}>{remCount}⏰</span>}
+              🔔{notifCount > 0 && <span className="dot">{notifCount}</span>}{remCount > 0 && <span className="dot" style={{ background: "var(--warn, #d97706)" }}>{remCount}⏰</span>}{pendingSync > 0 && <span className="dot" style={{ background: "var(--accent2, #22d3ee)" }}>{pendingSync}⇅</span>}
             </button>
             <button className="mini ghost" onClick={() => setUsOpen(true)} aria-label="Universal search">🔍</button>
             <button className="mini ghost" onClick={() => setHelpOpen(true)} aria-label="Keyboard shortcuts">⌨</button>
@@ -357,7 +365,7 @@ export default function Home() {
         )}
         {tab === "crew" && (
           <ErrorBoundary>
-            <CrewView userId={user.user_id} sessionToken={vaultSession} />
+            <CrewView userId={user.user_id} sessionToken={vaultSession} authToken={authToken} offline={!online} pendingSync={pendingSync} />
           </ErrorBoundary>
         )}
         {tab === "studio" && (
@@ -367,7 +375,7 @@ export default function Home() {
         )}
         {tab === "study" && (
           <ErrorBoundary>
-            <StudyView authToken={authToken} userId={user.user_id} />
+            <StudyView authToken={authToken} userId={user.user_id} offline={!online} pendingSync={pendingSync} />
           </ErrorBoundary>
         )}
         {tab === "rooms" && <ErrorBoundary><RoomsView userId={user.user_id} /></ErrorBoundary>}

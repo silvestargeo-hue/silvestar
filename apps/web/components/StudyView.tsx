@@ -4,18 +4,22 @@
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "@/lib/kit";
 import { useI18n } from "@/lib/i18n";
+import { isOffline, enqueue } from "@/lib/offline";
 
 const API = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
 
 type Deck = { name: string; cards: number; due: number };
 type Card = { id: string; front: string; back: string; reps: number };
 
-export function StudyView({ authToken, userId }: { authToken: string; userId: string }) {
+export function StudyView({ authToken, userId, offline = false, pendingSync = 0 }: {
+  authToken: string; userId: string; offline?: boolean; pendingSync?: number;
+}) {
   const { t } = useI18n();
   const [decks, setDecks] = useState<Deck[]>([]);
   const [title, setTitle] = useState("");
   const [text, setText] = useState("");
   const [genBusy, setGenBusy] = useState(false);
+  const [impName, setImpName] = useState("");
   const [reviewing, setReviewing] = useState<{ deck: string; cards: Card[] } | null>(null);
   const [idx, setIdx] = useState(0);
   const [showBack, setShowBack] = useState(false);
@@ -99,6 +103,57 @@ export function StudyView({ authToken, userId }: { authToken: string; userId: st
     loadDecks();
   };
 
+  // --------------------------------------------------- deck exchange ------
+  const exportDeck = async (deck: string) => {
+    try {
+      const r = await fetch(`${API}/api/v1/study/decks/${encodeURIComponent(deck)}/export`, { headers: authH() });
+      if (!r.ok) throw new Error(`${r.status}`);
+      const blob = await r.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `deck-${deck.replace(/[^A-Za-z0-9]+/g, "-").toLowerCase()}.json`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+      toast("Deck exported ✓", "ok");
+    } catch (e) {
+      toast(String(e instanceof Error ? e.message : e), "err");
+    }
+  };
+
+  const importFile = async (f: File) => {
+    const raw = await f.text();
+    let payload: unknown;
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      payload = { text: raw }; // plain “front :: back” lines
+    }
+    const fromPayload = (payload as { deck?: string }).deck || "";
+    const deckName = (impName.trim() || fromPayload || f.name.replace(/\.(json|txt)$/i, "")).slice(0, 60);
+    if (!deckName) { toast("Deck name required", "err"); return; }
+    if (offline || isOffline()) {
+      const n = enqueue(
+        `${API}/api/v1/study/decks/import?deck=${encodeURIComponent(deckName)}`,
+        payload, authH(),
+      );
+      toast(`Offline — import queued, will sync automatically (queue: ${n})`, "ok");
+      return;
+    }
+    try {
+      const r = await fetch(`${API}/api/v1/study/decks/import?deck=${encodeURIComponent(deckName)}`, {
+        method: "POST", headers: { "Content-Type": "application/json", ...authH() },
+        body: JSON.stringify(payload),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.detail || `${r.status}`);
+      toast(`Imported ${j.added} card${j.added === 1 ? "" : "s"}${j.skipped ? ` · ${j.skipped} duplicate${j.skipped === 1 ? "" : "s"} skipped` : ""} ✓`, "ok");
+      setImpName("");
+      loadDecks();
+    } catch (e) {
+      toast(String(e instanceof Error ? e.message : e), "err");
+    }
+  };
+
   // ------------------------------------------------------ review session --
   if (reviewing) {
     const card = reviewing.cards[idx];
@@ -143,6 +198,19 @@ export function StudyView({ authToken, userId }: { authToken: string; userId: st
         </button>
       </div>
 
+      <div className="card" style={{ marginBottom: 14 }}>
+        <b>📥 Import deck</b>
+        <div className="row" style={{ marginTop: 8, flexWrap: "wrap", gap: 8 }}>
+          <input value={impName} placeholder="Deck name (optional)" onChange={(e) => setImpName(e.target.value)} style={{ maxWidth: 200 }} />
+          <input type="file" accept=".json,.txt" aria-label="Deck file"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) importFile(f); e.target.value = ""; }} />
+        </div>
+        <div className="hint" style={{ marginTop: 6 }}>
+          Accepts exported Silvestar deck JSON or plain “question :: answer” lines.
+          {offline ? ` Offline mode: imports are queued and synced automatically (queue: ${pendingSync}).` : ""}
+        </div>
+      </div>
+
       {decks.length === 0 ? (
         <div className="empty"><div className="big">🃏</div><p>{t("noDecks")}</p></div>
       ) : decks.map((d) => (
@@ -154,6 +222,7 @@ export function StudyView({ authToken, userId }: { authToken: string; userId: st
             </span>
             <span style={{ display: "flex", gap: 6 }}>
               <button className="btn tiny primary" disabled={!d.due} onClick={() => startReview(d.name)}>▶ {t("review")}</button>
+              <button className="btn tiny ghost" title="Export deck as JSON" onClick={() => exportDeck(d.name)}>⇩</button>
               <button className="btn tiny danger" onClick={() => deleteDeck(d.name)}>🗑</button>
             </span>
           </div>

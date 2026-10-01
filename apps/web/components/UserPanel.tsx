@@ -8,6 +8,7 @@ import { api } from "@/lib/api";
 import { StatTile } from "./Stat";
 import { toast } from "@/lib/kit";
 import { useI18n } from "@/lib/i18n";
+import { initOfflineSync, isOffline, enqueue, queueSize } from "@/lib/offline";
 
 type Stats = {
   user_id: string; vault_unlocked: boolean; vault_documents: number;
@@ -90,6 +91,19 @@ export function UserPanel({ userId, authToken, sessionToken, userName, onNavigat
   const [streak, setStreak] = useState<StreakRes | null>(null);
   const [recentFiles, setRecentFiles] = useState<RecentFile[]>([]);
   const [canInstall, setCanInstall] = useState(!!svInstallEvent);
+  const [offline, setOffline] = useState(isOffline());
+  const [pending, setPending] = useState(0);
+  // background sync: init once; refresh queue badge when connectivity changes
+  useEffect(() => {
+    initOfflineSync((n) => { if (n > 0) toast(`🌐 Back online — synced ${n} queued change${n > 1 ? "s" : ""}`, "ok"); });
+    setPending(queueSize());
+    const on = () => { setOffline(false); setPending(queueSize()); };
+    const off = () => setOffline(true);
+    window.addEventListener("online", on);
+    window.addEventListener("offline", off);
+    const t = setInterval(() => setPending(queueSize()), 5000);
+    return () => { window.removeEventListener("online", on); window.removeEventListener("offline", off); clearInterval(t); };
+  }, []);
   useEffect(() => {
     const t = setInterval(() => setCanInstall(!!svInstallEvent), 1500);
     const stop = setTimeout(() => clearInterval(t), 25000);
@@ -165,6 +179,15 @@ export function UserPanel({ userId, authToken, sessionToken, userName, onNavigat
     if (!txt || !remWhen || remBusy) return;
     const due = Math.floor(new Date(remWhen).getTime() / 1000);
     if (!due || due < Date.now() / 1000) { toast("Pick a future date & time", "err"); return; }
+    if (isOffline()) {
+      // offline: keep it on this device; background sync sends it later
+      const n = enqueue(`${API}/api/v1/reminders`, { text: txt, due, repeat: remRep }, authHeaders());
+      setRemText(""); setRemWhen("");
+      setRems((prev) => [...prev, { id: `local-${Date.now()}`, text: txt, due, repeat: remRep, fired: false } as RemRow]);
+      setPending(n);
+      toast(`Offline — saved on device, syncs automatically (queue: ${n})`, "ok");
+      return;
+    }
     setRemBusy(true);
     try {
       const r = await fetch(`${API}/api/v1/reminders`, {
@@ -365,6 +388,14 @@ export function UserPanel({ userId, authToken, sessionToken, userName, onNavigat
           )}
         </div>
       )}
+
+      <div className="card" style={{ marginBottom: 14 }}>
+        <div className="row" style={{ justifyContent: "space-between" }}>
+          <b>🌐 Offline status</b>
+          <span className="muted small">queue: {pending}</span>
+          <span className="tag">{offline ? "✈️ offline — changes are saved on device" : "✅ online"}</span>
+        </div>
+      </div>
 
       <div className="grid2">
         {widgets.includes("quick") && (

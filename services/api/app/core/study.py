@@ -157,3 +157,94 @@ async def delete_deck(user_id: str, deck: str) -> dict:
             await db.delete(h["id"])
             n += 1
     return {"deleted_cards": n}
+
+
+# ------------------------------------------------------- deck exchange ------
+async def export_deck(user_id: str, deck: str) -> dict:
+    """Export one deck as a portable JSON payload (shareable, re-importable)."""
+    hits = await db.search(f"study:{user_id}", " ", limit=200)
+    cards = []
+    for h in hits:
+        if (h.get("meta") or {}).get("kind") != "card":
+            continue
+        try:
+            rec = json.loads(h.get("content") or "{}")
+        except Exception:
+            continue
+        if rec.get("deck") != deck:
+            continue
+        cards.append({"front": rec.get("front", ""), "back": rec.get("back", "")})
+    return {
+        "format": "silvestar-deck", "version": 1,
+        "deck": deck, "cards": cards,
+        "exported": int(time.time()),
+    }
+
+
+def _plain_frontmatter(cards_text: str) -> list[dict]:
+    """Parse 'front :: back' lines (also ' | ' and 'Q:/A:')."""
+    out = []
+    for line in cards_text.splitlines():
+        line = line.strip().lstrip("-•*").strip()
+        line = __import__("re").sub(r"^\d+[.)]\s*", "", line)
+        if not line:
+            continue
+        sep = "::" if "::" in line else ("|" if "|" in line else "")
+        if not sep:
+            continue
+        front, back = line.split(sep, 1)
+        front, back = front.strip(), back.strip()
+        if front and back and len(front) > 2:
+            out.append({"front": front[:200], "back": back[:500]})
+    return out
+
+
+async def import_deck(user_id: str, deck: str, payload: dict) -> dict:
+    """Import a deck from a silvestar-deck JSON payload or a plain dict with
+    {cards:[{front,back}]}. Skips exact duplicates by (deck, front)."""
+    if not deck or not deck.strip():
+        return {"deck": deck, "added": 0, "skipped": 0}
+    deck = deck.strip()[:60]
+    raw_cards = payload.get("cards") if isinstance(payload, dict) else None
+    cards: list[dict] = []
+    if isinstance(raw_cards, list):
+        for c in raw_cards:
+            if isinstance(c, dict):
+                front = str(c.get("front") or c.get("q") or "").strip()
+                back = str(c.get("back") or c.get("a") or "").strip()
+                if front and back:
+                    cards.append({"front": front[:200], "back": back[:500]})
+    if not cards and isinstance(payload.get("text") or "", str):
+        cards = _plain_frontmatter(payload["text"])
+    if not cards:
+        return {"deck": deck, "added": 0, "skipped": 0}
+    # duplicate guard: fetch existing fronts for this deck
+    hits = await db.search(f"study:{user_id}", " ", limit=300)
+    existing = set()
+    for h in hits:
+        if (h.get("meta") or {}).get("kind") != "card":
+            continue
+        try:
+            rec = json.loads(h.get("content") or "{}")
+        except Exception:
+            continue
+        if rec.get("deck") == deck:
+            existing.add((rec.get("front") or "").strip().lower())
+    now = int(time.time())
+    added = skipped = 0
+    for c in cards[:200]:
+        key = c["front"].strip().lower()
+        if key in existing:
+            skipped += 1
+            continue
+        existing.add(key)
+        rec = {"deck": deck, "front": c["front"], "back": c["back"],
+               "ease": 2.5, "interval_days": 0, "reps": 0,
+               "due": now, "created": now, "imported": True}
+        await db.upsert_document(
+            _card_id(user_id, deck, c["front"]),
+            f"study:{user_id}", deck, json.dumps(rec),
+            meta={"kind": "card", "deck": deck},
+        )
+        added += 1
+    return {"deck": deck, "added": added, "skipped": skipped}

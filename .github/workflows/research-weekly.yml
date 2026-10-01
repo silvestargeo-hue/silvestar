@@ -1,0 +1,28 @@
+name: Weekly research agent
+
+# Runs every due weekly research job: the AI researches the topic on the free
+# AI chain and files a fresh report into the owner's Library → Research/,
+# with an in-app + email notification. Free.
+
+on:
+  schedule:
+    - cron: "0 5 * * 1"   # Mondays 05:00 UTC (after the daily skill harvest)
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger research jobs tick
+        env:
+          CRON_KEY: ${{ secrets.CRON_KEY }}
+        run: |
+          code=$(curl -s -o /tmp/res.json -w "%{http_code}" -X POST \
+            https://silvestar-api.vercel.app/api/v1/research/jobs/tick \
+            -G --data-urlencode "t=$(date +%s)" \
+            -H "x-cron-key: ${CRON_KEY}" --max-time 600)
+          echo "HTTP $code"; head -c 600 /tmp/res.json; echo
+          test "$code" = "200"
