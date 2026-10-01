@@ -28,6 +28,9 @@ from ..config import settings
 API = "https://api.github.com"
 MAX_BYTES = 40 * 1024 * 1024  # GitHub Contents API hard cap
 _INDEX = "library-index"      # special library holding per-user folder/file index
+TRASH_TTL = 30 * 86400         # soft-deleted files are recoverable for 30 days
+ZIP_MAX_FILES = 100            # max entries extracted per ZIP import
+ZIP_MAX_TOTAL = 200 * 1024 * 1024  # total extracted-bytes cap per ZIP
 
 
 def _fdoc_id(user_id: str, path: str) -> str:
@@ -331,6 +334,56 @@ class FileStore:
         await asyncio.gather(*[one(i) for i in items])
         return {"uploaded": len(results), "failed": len(errors), "files": results, "errors": errors}
 
+    # ---------------------------------------------------------- zip import --
+    async def import_zip(self, user_id: str, filename: str, data: bytes, folder: str = "") -> dict:
+        """Extract a ZIP into the Library, preserving subfolders.
+        Guards: zip-slip, ≤100 entries, ≤40MB each, ≤200MB total, dotfiles skipped."""
+        import io as _io
+        import zipfile as _zf
+        try:
+            zf = _zf.ZipFile(_io.BytesIO(data))
+        except Exception:
+            raise ValueError("not a valid ZIP file")
+        entries: list[tuple[Any, list[str]]] = []
+        for zi in zf.infolist():
+            if zi.is_dir():
+                continue
+            parts = [p for p in zi.filename.replace("\\", "/").split("/")
+                     if p not in ("", ".", "__MACOSX") and not p.startswith(".")]
+            if not parts or any(p == ".." for p in parts):
+                continue  # zip-slip / hidden guard
+            if len(entries) >= ZIP_MAX_FILES:
+                break
+            entries.append((zi, parts))
+        if not entries:
+            zf.close()
+            return {"uploaded": 0, "failed": 0, "files": [],
+                    "errors": [{"filename": filename, "error": "no extractable entries"}]}
+        results, errors = [], []
+        total = {"bytes": 0}
+        sem = asyncio.Semaphore(3)
+        base = "/".join(s for s in (folder or "").split("/") if s.strip())
+
+        async def one(zi, parts):
+            async with sem:
+                sub = "/".join(parts[:-1])
+                target = "/".join(x for x in (base, sub) if x)
+                try:
+                    b = zf.read(zi)
+                    if len(b) > MAX_BYTES:
+                        raise ValueError("entry exceeds 40MB")
+                    total["bytes"] += len(b)
+                    if total["bytes"] > ZIP_MAX_TOTAL:
+                        raise ValueError("zip exceeds 200MB extract limit")
+                    results.append(await self.upload(user_id, parts[-1], b, target))
+                except Exception as e:
+                    errors.append({"filename": zi.filename, "error": str(e)[:160]})
+
+        await asyncio.gather(*[one(zi, parts) for zi, parts in entries])
+        zf.close()
+        return {"uploaded": len(results), "failed": len(errors),
+                "files": results, "errors": errors}
+
     # ------------------------------------------------------------ listing --
     async def list_files(self, user_id: str, folder: str = "", prefix: str = "") -> dict:
         idx = await self._user_index(user_id)
@@ -404,17 +457,104 @@ class FileStore:
                 await db.delete("d-" + _fdoc_id(user_id, path)[2:])
         return {"id": _fdoc_id(user_id, new_path), **new_meta}
 
-    async def delete_file(self, user_id: str, path: str) -> dict:
+    async def delete_file(self, user_id: str, path: str, hard: bool = False) -> dict:
+        """Soft-delete to Trash (30-day restore) by default; hard=True removes bytes now."""
         idx = await self._user_index(user_id)
         meta = idx["files"].get(path)
-        ok = await self._delete_path(path)
+        if hard:
+            ok = await self._delete_path(path)
+        else:
+            ok = True
+            idx.setdefault("trash", {})[path] = {**(meta or {}), "deleted": int(time.time())}
         idx["files"].pop(path, None)
         self._prune_folders(idx)
         await self._save_index(user_id, idx)
         # remove RAG doc too
         from .db import db
         await db.delete("d-" + _fdoc_id(user_id, path)[2:])
-        return {"deleted": ok, "was_indexed": bool(meta and meta.get("indexed"))}
+        return {"deleted": ok, "was_indexed": bool(meta and meta.get("indexed")), "trashed": not hard}
+
+    # -------------------------------------------------------------- trash --
+    async def list_trash(self, user_id: str) -> dict:
+        """Trash contents; lazily hard-deletes entries older than 30 days."""
+        idx = await self._user_index(user_id)
+        trash = idx.setdefault("trash", {})
+        now = int(time.time())
+        expired = [p for p, m in trash.items()
+                   if now - int(m.get("deleted", now)) > TRASH_TTL]
+        for p in expired:
+            try:
+                await self._delete_path(p)
+            except Exception:
+                pass
+            trash.pop(p, None)
+        if expired:
+            await self._save_index(user_id, idx)
+        items = []
+        for p, m in trash.items():
+            age = now - int(m.get("deleted", now))
+            items.append({"name": p.rsplit("/", 1)[-1], "path": p,
+                          "folder": m.get("folder", ""), "size": m.get("size", 0),
+                          "mime": m.get("mime", ""), "deleted": m.get("deleted", 0),
+                          "expires_in_days": max(0, (TRASH_TTL - age) // 86400)})
+        items.sort(key=lambda r: -r.get("deleted", 0))
+        return {"files": items, "total": len(items)}
+
+    async def restore_file(self, user_id: str, path: str) -> dict:
+        """Put a trashed file back (re-indexes it for RAG)."""
+        idx = await self._user_index(user_id)
+        trash = idx.get("trash", {})
+        meta = trash.get(path)
+        if not meta:
+            raise FileNotFoundError("not in trash")
+        if path in idx["files"]:
+            return {"ok": False, "reason": "a file already exists at this path"}
+        data = await self._get_bytes(path)
+        if data is None:
+            trash.pop(path, None)
+            await self._save_index(user_id, idx)
+            raise FileNotFoundError("file bytes expired")
+        trash.pop(path, None)
+        idx["files"][path] = meta
+        if meta.get("folder") and meta["folder"] not in idx["folders"]:
+            idx["folders"].append(meta["folder"])
+        await self._save_index(user_id, idx)
+        text = await asyncio.to_thread(_extract_text, path.rsplit("/", 1)[-1],
+                                       meta.get("mime", ""), data)
+        if text:
+            from .db import db
+            await db.upsert_document(
+                "d-" + _fdoc_id(user_id, path)[2:], f"files:{user_id}",
+                path.rsplit("/", 1)[-1], text[:150_000],
+                meta={"kind": "file", "path": path, "mime": meta.get("mime", ""),
+                      "folder": meta.get("folder", "")},
+            )
+        return {"ok": True, "path": path, "name": path.rsplit("/", 1)[-1]}
+
+    async def purge_file(self, user_id: str, path: str) -> dict:
+        """Permanently delete one trashed file (bytes + entry)."""
+        idx = await self._user_index(user_id)
+        trash = idx.get("trash", {})
+        if path not in trash:
+            raise FileNotFoundError("not in trash")
+        ok = await self._delete_path(path)
+        trash.pop(path, None)
+        await self._save_index(user_id, idx)
+        return {"purged": ok}
+
+    async def empty_trash(self, user_id: str) -> dict:
+        idx = await self._user_index(user_id)
+        trash = idx.get("trash", {})
+        n = 0
+        for p in list(trash.keys()):
+            try:
+                if await self._delete_path(p):
+                    n += 1
+            except Exception:
+                pass
+            trash.pop(p, None)
+        await self._save_index(user_id, idx)
+        return {"purged": n}
 
     @staticmethod
     def _prune_folders(idx: dict, keep: str | set[str] = "") -> None:
@@ -440,6 +580,34 @@ class FileStore:
             "bytes": sum(f.get("size", 0) for f in files),
             "indexed": sum(1 for f in files if f.get("indexed")),
         }
+
+    # -------------------------------------------------------- duplicates ---
+    async def duplicates(self, user_id: str) -> dict:
+        """Group library files by identical content (git blob sha)."""
+        idx = await self._user_index(user_id)
+        groups: dict[str, list] = {}
+        for p, m in idx["files"].items():
+            sha = m.get("sha", "")
+            if sha:
+                groups.setdefault(sha, []).append({
+                    "name": p.rsplit("/", 1)[-1], "path": p,
+                    "folder": m.get("folder", ""), "size": m.get("size", 0),
+                    "uploaded": m.get("uploaded", 0)})
+        dups = [sorted(g, key=lambda r: r["uploaded"]) for g in groups.values() if len(g) > 1]
+        waste = sum(sum(f["size"] for f in g[1:]) for g in dups)
+        return {"groups": dups, "wasted_bytes": waste}
+
+    async def dedupe(self, user_id: str, keep: str = "oldest") -> dict:
+        """Trash every duplicate copy, keeping the oldest (or newest) per group."""
+        d = await self.duplicates(user_id)
+        removed = 0
+        for g in d["groups"]:
+            keeper = g[0] if keep == "oldest" else g[-1]
+            for f in g:
+                if f["path"] != keeper["path"]:
+                    await self.delete_file(user_id, f["path"])  # soft → recoverable
+                    removed += 1
+        return {"removed": removed, "groups": len(d["groups"])}
 
 
 # ------------------------------------------------------- text extraction --

@@ -94,6 +94,33 @@ async def my_spaces(uid: str, email: str) -> dict:
     return {"spaces": sorted(spaces.values(), key=lambda s: s["name"])}
 
 
+async def activity(uid: str, email: str, name: str) -> dict:
+    """Recent files + members of a space — readable by any member."""
+    folder = space_folder(name)
+    owner = await space_owner_uid(email, folder)
+    if not owner:
+        return {"ok": False, "reason": "no access to this space"}
+    from .files import files as filestore
+    listing = await filestore.list_files(owner, folder=folder)
+    recent = [{"name": f["name"], "path": f["path"], "size": f.get("size", 0),
+               "uploaded": f.get("uploaded", 0)}
+              for f in listing.get("files", [])][:15]
+    members: list[dict] = []
+    rows, _t = await db.list("spaces", limit=200)
+    for r in rows:
+        if (r.get("meta") or {}).get("kind") != "member":
+            continue
+        try:
+            c = json.loads(r.get("content") or "{}")
+        except Exception:
+            continue
+        if c.get("space") == name:
+            members.append({"email": c.get("email", ""), "role": c.get("role", "member"),
+                            "joined": c.get("created", 0)})
+    members.sort(key=lambda m: m.get("joined", 0))
+    return {"ok": True, "space": name, "folder": folder, "files": recent, "members": members}
+
+
 async def delete_space(space: str, requester_uid: str) -> dict:
     """Owner-only: delete a space and all its membership rows."""
     doc = await db.fetch(_space_id(space))

@@ -227,6 +227,73 @@ async def delete_file(request: Request, body: DeleteIn):
     return await files.delete_file(uid, body.path)
 
 
+# -------------------------------------------------------------- trash ------
+@router.get("/trash")
+async def trash_list(request: Request):
+    uid = await _uid_async(request)
+    return await files.list_trash(uid)
+
+
+class TrashPathIn(BaseModel):
+    path: str
+
+
+@router.post("/trash/restore")
+async def trash_restore(request: Request, body: TrashPathIn):
+    uid = await _uid_async(request)
+    try:
+        return await files.restore_file(uid, body.path)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e) or "not in trash")
+
+
+@router.post("/trash/purge")
+async def trash_purge(request: Request, body: TrashPathIn):
+    uid = await _uid_async(request)
+    try:
+        return await files.purge_file(uid, body.path)
+    except FileNotFoundError:
+        raise HTTPException(404, "not in trash")
+
+
+@router.post("/trash/empty")
+async def trash_empty(request: Request):
+    uid = await _uid_async(request)
+    return await files.empty_trash(uid)
+
+
+# ------------------------------------------------------- zip import --------
+class DedupeIn(BaseModel):
+    keep: str = "oldest"  # "oldest" | "newest"
+
+
+@router.post("/upload-zip")
+async def upload_zip(request: Request, file: UploadFile = File(...), folder: str = Form("")):
+    """Upload a ZIP: every entry is extracted into the Library (subfolders kept)."""
+    uid = await _uid_async(request)
+    data = await file.read()
+    if len(data) > 120 * 1024 * 1024:
+        raise HTTPException(413, "zip too large (120MB limit)")
+    try:
+        return await files.import_zip(uid, file.filename or "upload.zip", data, folder=folder)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get("/duplicates")
+async def dup_list(request: Request):
+    uid = await _uid_async(request)
+    return await files.duplicates(uid)
+
+
+@router.post("/dedupe")
+async def dedupe(request: Request, body: DedupeIn):
+    uid = await _uid_async(request)
+    if body.keep not in ("oldest", "newest"):
+        raise HTTPException(422, "keep must be 'oldest' or 'newest'")
+    return await files.dedupe(uid, body.keep)
+
+
 # ---------------------------------------------------------------- zip ------
 @router.get("/zip")
 async def zip_folder(request: Request, folder: str = Query("")):

@@ -585,6 +585,16 @@ async def space_delete(name: str, request: Request):
     return await spaces_svc.delete_space(name, uid)
 
 
+@app.get("/api/v1/spaces/{name}/activity", tags=["spaces"])
+async def space_activity(name: str, request: Request):
+    """Recent files + members of a shared space (members only)."""
+    await _uid_async(request)
+    authz = request.headers.get("authorization", "")
+    user = await auth.validate_session(authz[7:]) if authz.startswith("Bearer ") else None
+    email = (user or {}).get("email", "")
+    return await spaces_svc.activity("", email, name)
+
+
 # ------------------------------------------ Module 16b: CSV data chat -------
 class DataChatIn(BaseModel):
     q: str = Field(min_length=1, max_length=500)

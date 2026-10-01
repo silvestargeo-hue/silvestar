@@ -88,6 +88,17 @@ export function LibraryView({ userId, sessionToken, onChatWithFile }: {
   const [spEmail, setSpEmail] = useState("");
   const [spInviteTo, setSpInviteTo] = useState("");
   const [spBusy, setSpBusy] = useState(false);
+  const [spActFor, setSpActFor] = useState("");
+  const [spAct, setSpAct] = useState<{ files: { name: string; path: string; uploaded: number }[]; members: { email: string; role: string }[] } | null>(null);
+
+  const [trashOpen, setTrashOpen] = useState(false);
+  const [trashData, setTrashData] = useState<{ files: { name: string; path: string; folder: string; size: number; deleted: number; expires_in_days: number }[]; total: number }>({ files: [], total: 0 });
+  const [trashBusy, setTrashBusy] = useState(false);
+  const [dupOpen, setDupOpen] = useState(false);
+  const [dupData, setDupData] = useState<{ groups: { name: string; path: string; size: number; uploaded: number; folder: string }[][]; wasted_bytes: number }>({ groups: [], wasted_bytes: 0 });
+  const [dupBusy, setDupBusy] = useState(false);
+  const [zipBusy, setZipBusy] = useState(false);
+  const zipRef = useRef<HTMLInputElement>(null);
   const [design, setDesign] = useState<{ accent: string; view: "grid" | "list" }>(
     () => { try { return JSON.parse(localStorage.getItem("sv-library-design") || '{"accent":"#8a05ff","view":"grid"}'); } catch { return { accent: "#8a05ff", view: "grid" as const }; } }
   );
@@ -157,6 +168,85 @@ export function LibraryView({ userId, sessionToken, onChatWithFile }: {
     } catch (e) {
       toast(String(e instanceof Error ? e.message : e), "err");
     } finally { setSpBusy(false); }
+  };
+
+  const loadTrash = async () => {
+    setTrashBusy(true);
+    try {
+      const r = await fetch(`${API}/api/v1/files/trash`, { headers: authHeaders(sessionToken, userId) });
+      if (r.ok) setTrashData(await r.json());
+    } catch { /* keep old */ } finally { setTrashBusy(false); }
+  };
+
+  const trashOp = async (kind: "restore" | "purge" | "empty", path = "") => {
+    if (trashBusy) return;
+    setTrashBusy(true);
+    try {
+      const r = await fetch(`${API}/api/v1/files/trash/${kind}`, {
+        method: "POST", headers: { "Content-Type": "application/json", ...authHeaders(sessionToken, userId) },
+        body: kind === "empty" ? "{}" : JSON.stringify({ path }),
+      });
+      const j = await r.json();
+      if (!r.ok || j.ok === false) throw new Error(j.detail || j.reason || `${r.status}`);
+      toast(kind === "restore" ? "Restored ✓" : "Deleted forever", "ok");
+      await loadTrash();
+      load(folder);
+    } catch (e) {
+      toast(String(e instanceof Error ? e.message : e), "err");
+    } finally { setTrashBusy(false); }
+  };
+
+  const handleZip = async (f: File | null) => {
+    if (!f || zipBusy) return;
+    setZipBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", f);
+      if (folder) fd.append("folder", folder);
+      const r = await fetch(`${API}/api/v1/files/upload-zip`, { method: "POST", headers: authHeaders(sessionToken, userId), body: fd });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.detail || `${r.status}`);
+      toast(`Extracted ${j.uploaded} file(s)${j.failed ? `, ${j.failed} failed` : ""}`, j.failed ? "err" : "ok");
+      load(folder);
+    } catch (e) {
+      toast(String(e instanceof Error ? e.message : e), "err");
+    } finally { setZipBusy(false); }
+  };
+
+  const loadDups = async () => {
+    setDupBusy(true);
+    try {
+      const r = await fetch(`${API}/api/v1/files/duplicates`, { headers: authHeaders(sessionToken, userId) });
+      if (r.ok) setDupData(await r.json());
+    } catch { /* keep old */ } finally { setDupBusy(false); }
+  };
+
+  const dedupeNow = async (keep: "oldest" | "newest") => {
+    if (dupBusy) return;
+    setDupBusy(true);
+    try {
+      const r = await fetch(`${API}/api/v1/files/dedupe`, {
+        method: "POST", headers: { "Content-Type": "application/json", ...authHeaders(sessionToken, userId) },
+        body: JSON.stringify({ keep }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.detail || `${r.status}`);
+      toast(`Removed ${j.removed} duplicate(s) — moved to Trash`, "ok");
+      await loadDups();
+      load(folder);
+    } catch (e) {
+      toast(String(e instanceof Error ? e.message : e), "err");
+    } finally { setDupBusy(false); }
+  };
+
+  const loadActivity = async (space: string) => {
+    if (spActFor === space) { setSpActFor(""); setSpAct(null); return; }
+    setSpActFor(space); setSpAct(null);
+    try {
+      const r = await fetch(`${API}/api/v1/spaces/${encodeURIComponent(space)}/activity`, { headers: authHeaders(sessionToken, userId) });
+      const j = await r.json();
+      if (r.ok && j.ok !== false) setSpAct(j);
+    } catch { /* keep closed */ }
   };
 
   // web-clipper handoff: /?import=… deep link stashes a payload in localStorage
@@ -537,6 +627,15 @@ export function LibraryView({ userId, sessionToken, onChatWithFile }: {
           <button className="btn ghost" disabled={zipping || !data.total} onClick={downloadZip} title="Download all files in view as ZIP">
             {zipping ? "⏳ Zipping…" : "🗜 ZIP"}
           </button>
+          <button className="btn ghost" disabled={zipBusy} onClick={() => zipRef.current?.click()} title="Upload a ZIP and extract every file into this folder">
+            {zipBusy ? "⏳ Extracting…" : "📦 ZIP in"}
+          </button>
+          <button className="btn ghost" onClick={() => { const n = !trashOpen; setTrashOpen(n); if (n) loadTrash(); }} title="Deleted files — 30-day restore">
+            🗑 Trash{trashData.total > 0 ? ` (${trashData.total})` : ""}
+          </button>
+          <button className="btn ghost" onClick={() => { const n = !dupOpen; setDupOpen(n); if (n) loadDups(); }} title="Find files with identical content">
+            🧬 Duplicates
+          </button>
           <button className="btn ghost" onClick={() => setNewFolderOpen(true)}>📁 New folder</button>
           <button className="btn ghost" disabled={busy} onClick={() => bulkRef.current?.click()}>⬆ Bulk upload</button>
           <button className="btn primary" disabled={busy} onClick={() => oneRef.current?.click()}>⬆ Upload</button>
@@ -545,6 +644,69 @@ export function LibraryView({ userId, sessionToken, onChatWithFile }: {
 
       <input ref={oneRef} type="file" hidden onChange={(e) => { doUpload(e.target.files, false); e.target.value = ""; }} />
       <input ref={bulkRef} type="file" multiple hidden onChange={(e) => { doUpload(e.target.files, true); e.target.value = ""; }} />
+      <input ref={zipRef} type="file" accept=".zip,application/zip" hidden
+        onChange={(e) => { handleZip(e.target.files?.[0] || null); e.target.value = ""; }} />
+
+      {/* trash panel */}
+      {trashOpen && (
+        <div className="card" style={{ marginBottom: 12 }}>
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+            <b>🗑 Trash — deleted files stay recoverable for 30 days</b>
+            {trashData.total > 0 && (
+              <button className="btn ghost" disabled={trashBusy} onClick={() => trashOp("empty")}>
+                {trashBusy ? "⏳" : "Empty trash"}
+              </button>
+            )}
+          </div>
+          {trashData.total === 0 ? (
+            <div className="hint" style={{ marginTop: 6 }}>Trash is empty.</div>
+          ) : (
+            <div style={{ marginTop: 8 }}>
+              {trashData.files.map((f) => (
+                <div key={f.path} className="hit" style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
+                  <div>
+                    <div className="t">📄 {f.name} <span className="muted small">{f.folder ? `· ${f.folder}` : ""} · {fmtSize(f.size)}</span></div>
+                    <div className="muted small">deleted {f.deleted ? new Date(f.deleted * 1000).toLocaleDateString() : ""} · {f.expires_in_days}d left</div>
+                  </div>
+                  <span style={{ display: "flex", gap: 6 }}>
+                    <button className="btn ghost" disabled={trashBusy} onClick={() => trashOp("restore", f.path)}>♻ Restore</button>
+                    <button className="btn ghost" disabled={trashBusy} onClick={() => trashOp("purge", f.path)}>✕ Forever</button>
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* duplicates panel */}
+      {dupOpen && (
+        <div className="card" style={{ marginBottom: 12 }}>
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+            <b>🧬 Duplicates — identical content, {dupData.groups.length} group(s){dupData.wasted_bytes > 0 ? ` · ${fmtSize(dupData.wasted_bytes)} wasted` : ""}</b>
+            {dupData.groups.length > 0 && (
+              <span style={{ display: "flex", gap: 6 }}>
+                <button className="btn ghost" disabled={dupBusy} onClick={() => dedupeNow("oldest")}>{dupBusy ? "⏳" : "Keep oldest"}</button>
+                <button className="btn ghost" disabled={dupBusy} onClick={() => dedupeNow("newest")}>Keep newest</button>
+              </span>
+            )}
+          </div>
+          {dupData.groups.length === 0 ? (
+            <div className="hint" style={{ marginTop: 6 }}>No duplicates found.</div>
+          ) : (
+            <div style={{ marginTop: 8 }}>
+              {dupData.groups.map((g, gi) => (
+                <div key={gi} className="hit">
+                  <div className="t">📄 {g[0].name} <span className="muted small">× {g.length} copies · {fmtSize(g[0].size)}</span></div>
+                  {g.map((f) => (
+                    <div key={f.path} className="muted small">· {f.path}</div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {uploading && <div className="muted">Uploading…</div>}
 
@@ -577,9 +739,25 @@ export function LibraryView({ userId, sessionToken, onChatWithFile }: {
               {s.role === "owner" && spInviteTo !== s.name && (
                 <button className="link" onClick={() => setSpInviteTo(s.name)} title={t("spInvite")}>✉</button>
               )}
+              <button className="link" onClick={() => loadActivity(s.name)} title="Recent activity">🕘</button>
             </span>
           ))}
         </div>
+        {spActFor && spAct && (
+          <div style={{ marginTop: 10 }}>
+            <b className="small">🕘 {spActFor} — recent activity</b>
+            {spAct.files.length === 0 && <div className="hint">No files in this space yet.</div>}
+            {spAct.files.slice(0, 6).map((f) => (
+              <div key={f.path} className="muted small">📄 {f.name} · {f.uploaded ? new Date(f.uploaded * 1000).toLocaleString() : ""}</div>
+            ))}
+            {spAct.members.length > 0 && (
+              <div className="muted small" style={{ marginTop: 4 }}>
+                Members: {spAct.members.map((m) => `${m.email} (${m.role})`).join(", ")}
+              </div>
+            )}
+          </div>
+        )}
+        {spActFor && !spAct && <div className="muted small" style={{ marginTop: 8 }}>⏳ Loading activity…</div>}
       </details>
 
       <details className="card" style={{ marginBottom: 12 }}>
