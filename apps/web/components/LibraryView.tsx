@@ -43,8 +43,9 @@ function icon(mime: string, name: string): string {
   return "📦";
 }
 
-export function LibraryView({ userId, sessionToken, onChatWithFile }: {
+export function LibraryView({ userId, sessionToken, onChatWithFile, onChatWithFiles }: {
   userId: string; sessionToken: string; onChatWithFile?: (f: { path: string; name: string }) => void;
+  onChatWithFiles?: (files: { path: string; name: string }[]) => void;
 }) {
   const { t } = useI18n();
   const [data, setData] = useState<ListRes>({ files: [], folders: [], total: 0 });
@@ -553,6 +554,38 @@ export function LibraryView({ userId, sessionToken, onChatWithFile }: {
     onChatWithFile?.({ path: f.path, name: f.name });
   };
 
+  const chatWithSelected = () => {
+    const metas = data.files.filter((f) => selected.has(f.path) && f.indexed);
+    if (!metas.length) { toast("Select indexed (AI-searchable) files first", "err"); return; }
+    if (metas.length > 8) { toast("Max 8 files per chat", "err"); return; }
+    onChatWithFiles?.(metas.map((f) => ({ path: f.path, name: f.name })));
+    clearSel();
+  };
+
+  const [renOpen, setRenOpen] = useState(false);
+  const [renPattern, setRenPattern] = useState("");
+  const [renStart, setRenStart] = useState(1);
+  const [renBusy, setRenBusy] = useState(false);
+
+  const batchRename = async () => {
+    if (renBusy || !renPattern.trim()) return;
+    setRenBusy(true);
+    try {
+      const r = await fetch(`${API}/api/v1/files/batch-rename`, {
+        method: "POST", headers: { "Content-Type": "application/json", ...authHeaders(sessionToken, userId) },
+        body: JSON.stringify({ paths: [...selected], pattern: renPattern.trim(), start: renStart }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.detail || `${r.status}`);
+      toast(`Renamed ${j.renamed} file(s)${j.errors?.length ? `, ${j.errors.length} skipped` : ""}`, j.errors?.length ? "err" : "ok");
+      setRenOpen(false); setRenPattern("");
+      clearSel();
+      load(folder);
+    } catch (e) {
+      toast(String(e instanceof Error ? e.message : e), "err");
+    } finally { setRenBusy(false); }
+  };
+
   const runSummary = async () => {
     if (sumBusy) return;
     setSumBusy(true);
@@ -871,11 +904,36 @@ export function LibraryView({ userId, sessionToken, onChatWithFile }: {
       {selected.size > 0 && (
         <div className="bulk-bar">
           <b>{selected.size}</b>&nbsp;selected
+          <button className="btn tiny" onClick={chatWithSelected} title="Chat with all selected indexed files at once">💬 Chat</button>
+          <button className="btn tiny" onClick={() => setRenOpen(true)} title="Rename all selected files by pattern">✏ Rename</button>
           <button className="btn tiny" onClick={() => bulkOp("move", folder)}>{folder ? `Move here (${folder})` : "Move to root"}</button>
           <button className="btn tiny" onClick={() => { const f2 = prompt("Move to folder (empty = root):", folder || ""); if (f2 !== null) bulkOp("move", f2); }}>➡ Move to…</button>
           <button className="btn tiny danger" onClick={() => bulkOp("delete")}>🗑 Delete</button>
           <button className="btn tiny ghost" onClick={clearSel}>Cancel</button>
         </div>
+      )}
+
+      {/* batch rename modal */}
+      {renOpen && (
+        <Modal title={`✏ Batch rename — ${selected.size} file(s)`} onClose={() => setRenOpen(false)}>
+          <div className="hint">
+            Tokens: <code>{"{n}"}</code> number · <code>{"{date}"}</code> today · <code>{"{name}"}</code> old name · <code>{"{ext}"}</code> extension.<br />
+            Example: <code>scan-&#123;n&#125;.&#123;ext&#125;</code> → scan-1.pdf, scan-2.jpg …
+          </div>
+          <div className="row" style={{ marginTop: 10 }}>
+            <input className="input" value={renPattern} placeholder="scan-{n}.{ext}" autoFocus
+              onChange={(e) => setRenPattern(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && batchRename()} style={{ flex: 1 }} />
+            <input className="input" type="number" min={1} value={renStart} title="Start numbering at"
+              onChange={(e) => setRenStart(Math.max(1, parseInt(e.target.value || "1", 10)))} style={{ width: 70 }} />
+          </div>
+          <div className="row" style={{ marginTop: 12, justifyContent: "flex-end" }}>
+            <button className="btn ghost" onClick={() => setRenOpen(false)}>Cancel</button>
+            <button className="btn primary" disabled={renBusy || !renPattern.trim()} onClick={batchRename}>
+              {renBusy ? "⏳ Renaming…" : "✏ Rename"}
+            </button>
+          </div>
+        </Modal>
       )}
 
       {/* files */}

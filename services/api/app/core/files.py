@@ -616,6 +616,48 @@ class FileStore:
         waste = sum(sum(f["size"] for f in g[1:]) for g in dups)
         return {"groups": dups, "wasted_bytes": waste}
 
+    async def batch_rename(self, user_id: str, paths: list[str], pattern: str, start: int = 1) -> dict:
+        """Rename many files by pattern. Tokens: {n} number, {date} YYYY-MM-DD,
+        {name} old stem, {ext} extension. Empty segments are skipped."""
+        import re as _re
+        idx = await self._user_index(user_id)
+        date = time.strftime("%Y-%m-%d")
+        results, errors = [], []
+        n = max(1, int(start))
+        used: set[str] = set()
+        for p in paths[:50]:
+            meta = idx["files"].get(p)
+            if not meta:
+                errors.append({"path": p, "error": "not found"})
+                continue
+            old_name = p.rsplit("/", 1)[-1]
+            stem, dot, ext = old_name.rpartition(".")
+            if not dot:
+                stem, ext = old_name, ""
+            folder = p[: len(p) - len(old_name) - 1] if "/" in p else ""
+            new_name = (pattern.replace("{n}", str(n))
+                               .replace("{date}", date)
+                               .replace("{name}", _safe_segment(stem)[:40])
+                               .replace("{ext}", ext))
+            new_name = _safe_segment(new_name.strip(".") or old_name)
+            if not new_name or new_name == old_name:
+                n += 1
+                continue
+            new_path = ("files/" + _safe_segment(user_id) +
+                        (f"/{folder}" if folder else "") + f"/{new_name}").replace("//", "/")
+            if new_path in used or (new_path in idx["files"] and new_path != p):
+                errors.append({"path": p, "error": f"target exists: {new_name}"})
+                continue
+            try:
+                await self.rename(user_id, p, new_name)
+                idx = await self._user_index(user_id)  # rename() rewrote the index
+                used.add(new_path)
+                results.append({"old": p, "new": new_path})
+                n += 1
+            except Exception as e:
+                errors.append({"path": p, "error": str(e)[:140]})
+        return {"renamed": len(results), "results": results, "errors": errors}
+
     async def dedupe(self, user_id: str, keep: str = "oldest") -> dict:
         """Trash every duplicate copy, keeping the oldest (or newest) per group."""
         d = await self.duplicates(user_id)

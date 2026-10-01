@@ -109,7 +109,7 @@ export const api = {
 
   // AI
   ask: (question: string, user_id: string, vault_session_token = "", history: { role: string; content: string }[] = [],
-        opts: { lang?: string; folder?: string; file_path?: string; engine?: string } = {}) =>
+        opts: { lang?: string; folder?: string; file_path?: string; file_paths?: string[]; engine?: string } = {}) =>
     req<AskResult>("/api/v1/ask", {
       method: "POST",
       body: JSON.stringify({
@@ -117,6 +117,7 @@ export const api = {
         ...(opts.lang ? { lang: opts.lang } : {}),
         ...(opts.folder ? { folder: opts.folder } : {}),
         ...(opts.file_path ? { file_path: opts.file_path } : {}),
+        ...(opts.file_paths?.length ? { file_paths: opts.file_paths } : {}),
         ...(opts.engine ? { engine: opts.engine } : {}),
       }),
     }),
@@ -152,7 +153,7 @@ export const api = {
   askStream: async function* (
     question: string, user_id: string, vault_session_token = "",
     history: { role: string; content: string }[] = [],
-    opts: { lang?: string; folder?: string; file_path?: string; engine?: string } = {},
+    opts: { lang?: string; folder?: string; file_path?: string; file_paths?: string[]; engine?: string } = {},
     signal?: AbortSignal,
   ) {
     const res = await fetch(`${API_URL}/api/v1/ask/stream`, {
@@ -164,6 +165,7 @@ export const api = {
         ...(opts.lang ? { lang: opts.lang } : {}),
         ...(opts.folder ? { folder: opts.folder } : {}),
         ...(opts.file_path ? { file_path: opts.file_path } : {}),
+        ...(opts.file_paths?.length ? { file_paths: opts.file_paths } : {}),
         ...(opts.engine ? { engine: opts.engine } : {}),
       }),
     });

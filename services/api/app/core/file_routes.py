@@ -286,6 +286,20 @@ async def dup_list(request: Request):
     return await files.duplicates(uid)
 
 
+class RenameBatchIn(BaseModel):
+    paths: list[str]
+    pattern: str = Field(min_length=1, max_length=80)
+    start: int = 1
+
+
+@router.post("/batch-rename")
+async def batch_rename(request: Request, body: RenameBatchIn):
+    uid = await _uid_async(request)
+    if not body.paths:
+        raise HTTPException(422, "no files selected")
+    return await files.batch_rename(uid, body.paths, body.pattern, body.start)
+
+
 @router.post("/dedupe")
 async def dedupe(request: Request, body: DedupeIn):
     uid = await _uid_async(request)

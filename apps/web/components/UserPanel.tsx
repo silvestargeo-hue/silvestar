@@ -19,10 +19,11 @@ type FileStats = { files: number; folders: number; bytes: number; indexed: numbe
 type DeckRow = { name: string; cards: number; due: number };
 type SpaceRow = { name: string; role: string; folder: string };
 type CrewFile = { name: string; path: string; uploaded: number };
+type RemRow = { id: string; text: string; due: number; fired: boolean };
 
 const API = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
 
-const WIDGETS = ["tiles", "quick", "recent", "study", "spaces", "crew"] as const;
+const WIDGETS = ["tiles", "quick", "recent", "study", "spaces", "crew", "rem"] as const;
 type WidgetId = (typeof WIDGETS)[number];
 const WIDGET_LABELS: Record<WidgetId, string> = {
   tiles: "📊 Stat tiles",
@@ -31,8 +32,9 @@ const WIDGET_LABELS: Record<WidgetId, string> = {
   study: "🃏 Study due",
   spaces: "👥 Shared spaces",
   crew: "👥 Crew reports",
+  rem: "⏰ Reminders",
 };
-const DEFAULT_WIDGETS: WidgetId[] = ["tiles", "quick", "recent", "study", "spaces", "crew"];
+const DEFAULT_WIDGETS: WidgetId[] = ["tiles", "quick", "recent", "study", "spaces", "crew", "rem"];
 const WKEY = "sv-widgets";
 
 function loadWidgets(): WidgetId[] {
@@ -67,6 +69,10 @@ export function UserPanel({ userId, authToken, sessionToken, userName, onNavigat
   const [decks, setDecks] = useState<DeckRow[]>([]);
   const [spaces, setSpaces] = useState<SpaceRow[]>([]);
   const [crewFiles, setCrewFiles] = useState<CrewFile[]>([]);
+  const [rems, setRems] = useState<RemRow[]>([]);
+  const [remText, setRemText] = useState("");
+  const [remWhen, setRemWhen] = useState("");
+  const [remBusy, setRemBusy] = useState(false);
   const [widgets, setWidgets] = useState<WidgetId[]>(DEFAULT_WIDGETS);
   const [customize, setCustomize] = useState(false);
   const { t } = useI18n();
@@ -95,6 +101,10 @@ export function UserPanel({ userId, authToken, sessionToken, userName, onNavigat
       const r = await fetch(`${API}/api/v1/files?folder=Crew-Reports`, { headers: authHeaders() });
       if (r.ok) setCrewFiles(((await r.json()).files || []) as CrewFile[]);
     } catch { setCrewFiles([]); }
+    try {
+      const r = await fetch(`${API}/api/v1/reminders`, { headers: authHeaders() });
+      if (r.ok) setRems(((await r.json()).reminders || []) as RemRow[]);
+    } catch { setRems([]); }
   }, [userId, sessionToken, authHeaders]);
 
   useEffect(() => {
@@ -102,6 +112,37 @@ export function UserPanel({ userId, authToken, sessionToken, userName, onNavigat
     const t = setInterval(load, 60000);
     return () => clearInterval(t);
   }, [load]);
+
+  const addReminder = async () => {
+    const txt = remText.trim();
+    if (!txt || !remWhen || remBusy) return;
+    const due = Math.floor(new Date(remWhen).getTime() / 1000);
+    if (!due || due < Date.now() / 1000) { toast("Pick a future date & time", "err"); return; }
+    setRemBusy(true);
+    try {
+      const r = await fetch(`${API}/api/v1/reminders`, {
+        method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ text: txt, due }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.detail || `${r.status}`);
+      setRemText(""); setRemWhen("");
+      const rl = await fetch(`${API}/api/v1/reminders`, { headers: authHeaders() });
+      if (rl.ok) setRems(((await rl.json()).reminders || []) as RemRow[]);
+      toast("Reminder set ⏰", "ok");
+    } catch (e) {
+      toast(String(e instanceof Error ? e.message : e), "err");
+    } finally { setRemBusy(false); }
+  };
+
+  const delReminder = async (id: string) => {
+    try {
+      await fetch(`${API}/api/v1/reminders/${encodeURIComponent(id)}`, {
+        method: "DELETE", headers: authHeaders(),
+      });
+      setRems((rs) => rs.filter((x) => x.id !== id));
+    } catch { /* ignore */ }
+  };
 
   const toggleWidget = (w: WidgetId) => {
     const next = widgets.includes(w) ? widgets.filter((x) => x !== w) : [...widgets, w];
@@ -200,6 +241,37 @@ export function UserPanel({ userId, authToken, sessionToken, userName, onNavigat
                 <div className="hint">No reports yet — run the Crew.</div>
               )}
               <button className="btn ghost" style={{ marginTop: 8 }} onClick={() => onNavigate("crew")}>Open Crew</button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {widgets.includes("rem") && (
+        <div className="card" style={{ marginBottom: 14 }}>
+          <h2>⏰ Reminders</h2>
+          <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
+            <input value={remText} placeholder="e.g. Call the bank" style={{ flex: 1, minWidth: 160 }}
+              onChange={(e) => setRemText(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && addReminder()} disabled={remBusy} />
+            <input type="datetime-local" value={remWhen} style={{ width: 200 }}
+              onChange={(e) => setRemWhen(e.target.value)} disabled={remBusy} />
+            <button className="btn primary" disabled={remBusy || !remText.trim() || !remWhen} onClick={addReminder}>
+              {remBusy ? "⏳" : "➕ Set"}
+            </button>
+          </div>
+          {rems.length === 0 ? (
+            <div className="hint" style={{ marginTop: 8 }}>No reminders yet — due ones ring the 🔔 bell automatically.</div>
+          ) : (
+            <div style={{ marginTop: 8 }}>
+              {rems.slice(0, 6).map((r) => (
+                <div key={r.id} className="hit" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                  <div>
+                    <div className="t">{r.fired ? "🔔" : "⏰"} {r.text}</div>
+                    <div className="muted small">{new Date(r.due * 1000).toLocaleString()}{r.fired ? " · notified" : ""}</div>
+                  </div>
+                  <button className="mini ghost" onClick={() => delReminder(r.id)} title="Delete reminder">✕</button>
+                </div>
+              ))}
             </div>
           )}
         </div>

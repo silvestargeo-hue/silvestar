@@ -118,6 +118,27 @@ async def build_file_context(query: str, user_id: str, file_path: str) -> tuple[
     return block, [r]
 
 
+async def build_files_context(query: str, user_id: str, file_paths: list[str]) -> tuple[str, list[Retrieved]]:
+    """Context from SEVERAL selected Library files, citations renumbered [1..N]."""
+    all_cited: list[Retrieved] = []
+    for fp in file_paths[:8]:
+        _b, cited = await build_file_context(query, user_id, fp)
+        for c in cited:
+            if not any(x.id == c.id for x in all_cited):
+                all_cited.append(c)
+    if not all_cited:
+        return "", []
+    blocks = [f"[{i}] ({r.library}) {r.title}: " for i, r in enumerate(all_cited, 1)]
+    # refill each block with the full text fetched again (build_file_context caps at 14k)
+    from .db import db
+    from .files import _fdoc_id
+    for i, r in enumerate(all_cited, 1):
+        doc = await db.fetch(r.id)
+        blocks[i - 1] += (doc or {}).get("content", "")[:14_000]
+        r.cited = True
+    return "\n\n".join(blocks), all_cited
+
+
 def system_prompt(context: str, cited: list[Retrieved]) -> str:
     base = (
         "You are Silvestar, the AI assistant of the Silvestar platform. "

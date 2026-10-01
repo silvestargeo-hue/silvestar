@@ -72,6 +72,7 @@ export default function Home() {
   const [lockOn, setLockOn] = useState(false); // setting: lock on start
   const [vaultSession, setVaultSession] = useState<string>(""); // vault unlock (separate from login)
   const [chatFile, setChatFile] = useState<{ path: string; name: string } | null>(null); // chat-with-one-file
+  const [chatFiles, setChatFiles] = useState<{ path: string; name: string }[] | null>(null); // chat-with-selected-files
   const [adminFlag, setAdminFlag] = useState(false); // legacy admin-key login
   const [showLanding, setShowLanding] = useState(true); // landing before sign-in
   const [landingSignup, setLandingSignup] = useState(false); // CTA target mode
@@ -260,7 +261,9 @@ export default function Home() {
               sessionToken={vaultSession}
               authToken={authToken}
               chatFile={chatFile}
+              chatFiles={chatFiles}
               onClearChatFile={() => setChatFile(null)}
+              onClearChatFiles={() => setChatFiles(null)}
             />
           </ErrorBoundary>
         )}
@@ -269,7 +272,8 @@ export default function Home() {
             <LibraryView
               userId={user.user_id}
               sessionToken={authToken}
-              onChatWithFile={(f) => { setChatFile(f); setTab("ask"); }}
+              onChatWithFile={(f) => { setChatFiles(null); setChatFile(f); setTab("ask"); }}
+              onChatWithFiles={(fs) => { setChatFile(null); setChatFiles(fs); setTab("ask"); }}
             />
           </ErrorBoundary>
         )}

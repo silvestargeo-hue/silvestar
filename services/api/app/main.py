@@ -108,6 +108,7 @@ class AskIn(BaseModel):
     lang: str = ""     # reply language: en|hi|ne|es|ar|fr (empty = auto/English)
     folder: str = ""   # scope RAG to a Library folder (files:<uid> only)
     file_path: str = ""  # chat with ONE Library file (overrides folder)
+    file_paths: list[str] = []  # chat with SEVERAL selected Library files (max 8)
     engine: str = ""   # preferred engine: "" auto | groq | pollinations | openrouter
     use_tools: bool = True   # builtin auto-tools (omniverse, web, math, time)
     use_skills: bool = True  # auto-apply user + gallery skills
@@ -292,7 +293,8 @@ async def ask(body: AskIn, request: Request):
     uid = body.user_id or await _uid_async(request)
     return await ai.chat(body.question, uid, body.vault_session_token, body.history,
                          lang=body.lang, folder=body.folder, file_path=body.file_path,
-                         engine=body.engine, use_tools=body.use_tools, use_skills=body.use_skills)
+                         engine=body.engine, use_tools=body.use_tools, use_skills=body.use_skills,
+                         file_paths=(body.file_paths or [])[:8])
 
 
 @app.post("/api/v1/ask/followups", tags=["ai"])
@@ -340,7 +342,8 @@ async def ask_stream(body: AskIn, request: Request):
         async for ev in ai.stream_chat(body.question, uid, body.vault_session_token,
                                        body.history, lang=body.lang, folder=body.folder,
                                        file_path=body.file_path, engine=body.engine,
-                                       use_tools=body.use_tools, use_skills=body.use_skills):
+                                       use_tools=body.use_tools, use_skills=body.use_skills,
+                                       file_paths=(body.file_paths or [])[:8]):
             yield f"data: {__import__('json').dumps(ev)}\n\n"
 
     from fastapi.responses import StreamingResponse
@@ -1260,6 +1263,69 @@ async def archive_versions(doc_id: str):
 class NotifyIn(BaseModel):
     message: str = Field(min_length=1, max_length=280)
     user_id: str = "anon"
+
+
+# ----------------------------------------------- Module 19: Reminders -------
+class ReminderIn(BaseModel):
+    text: str = Field(min_length=1, max_length=280)
+    due: int = Field(ge=0, le=4_102_444_800)  # unix seconds
+
+
+def _rem_id(user_id: str, rid: str) -> str:
+    return f"r-{user_id}-{rid}"[:80]
+
+
+@app.post("/api/v1/reminders", tags=["user"])
+async def reminder_create(body: ReminderIn, request: Request):
+    uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in required")
+    import uuid
+    rid = uuid.uuid4().hex[:10]
+    await db.upsert_document(
+        _rem_id(uid, rid), f"reminders:{uid}", body.text,
+        __import__("json").dumps({"text": body.text, "due": int(body.due),
+                                  "fired": False, "created": int(time.time())}),
+        meta={"kind": "reminder"},
+    )
+    return {"id": rid, "text": body.text, "due": int(body.due)}
+
+
+@app.get("/api/v1/reminders", tags=["user"])
+async def reminder_list(request: Request):
+    """All reminders sorted by due time; due ones are pushed to the bell once."""
+    uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in required")
+    rows, _t = await db.list(f"reminders:{uid}", limit=100)
+    import json as _j
+    now = int(time.time())
+    out, fired_rows = [], []
+    for r in rows:
+        try:
+            rec = _j.loads(r.get("content") or "{}")
+        except Exception:
+            continue
+        if rec.get("due", 0) <= now and not rec.get("fired"):
+            rec["fired"] = True
+            fired_rows.append((r["id"], rec))
+            await _notify(uid, f"⏰ Reminder: {rec.get('text', '')[:120]}")
+        out.append({"id": r["id"], "text": rec.get("text", ""), "due": rec.get("due", 0),
+                    "fired": rec.get("fired", False)})
+    for rid, rec in fired_rows:
+        await db.upsert_document(rid, f"reminders:{uid}", rec.get("text", ""),
+                                 _j.dumps(rec), meta={"kind": "reminder"})
+    out.sort(key=lambda x: x["due"])
+    return {"reminders": out, "total": len(out)}
+
+
+@app.delete("/api/v1/reminders/{rid}", tags=["user"])
+async def reminder_delete(rid: str, request: Request):
+    uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in required")
+    ok = await db.delete(_rem_id(uid, rid))
+    return {"deleted": bool(ok)}
 
 
 async def _notify(user_id: str, message: str) -> None:

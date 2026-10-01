@@ -18,7 +18,7 @@ from typing import Any
 import httpx
 
 from ..config import settings
-from .rag import build_context, build_file_context, system_prompt
+from .rag import build_context, build_file_context, build_files_context, system_prompt
 from .skills import relevant_skills, run_skill_tools, run_tools, skills_system_block
 
 
@@ -254,10 +254,12 @@ class SilvestarAI:
 
     async def _context_for(self, question: str, user_id: str, session,
                            folder: str = "", file_path: str = "", use_tools: bool = True,
-                           use_skills: bool = True):
+                           use_skills: bool = True, file_paths: list[str] | None = None):
         """RAG context + automatic tool outputs (omniverse, web, math, time)
         + active skills block. Returns (context, cited, skills_block, tools_used)."""
-        if file_path:
+        if file_paths:
+            ctx, cited = await build_files_context(question, user_id, file_paths)
+        elif file_path:
             ctx, cited = await build_file_context(question, user_id, file_path)
         else:
             ctx, cited = await build_context(question, user_id, session, folder=folder)
@@ -297,7 +299,7 @@ class SilvestarAI:
     async def chat(self, question: str, user_id: str = "anon", vault_session_token: str = "",
                    history: list[dict] | None = None, lang: str = "", folder: str = "",
                    file_path: str = "", engine: str = "", use_tools: bool = True,
-                   use_skills: bool = True) -> dict:
+                   use_skills: bool = True, file_paths: list[str] | None = None) -> dict:
         t0 = time.time()
         session = None
         if vault_session_token:
@@ -306,7 +308,7 @@ class SilvestarAI:
 
         context, cited, skills_block, tools_used, skill_names = await self._context_for(
             question, user_id, session, folder=folder, file_path=file_path,
-            use_tools=use_tools, use_skills=use_skills)
+            use_tools=use_tools, use_skills=use_skills, file_paths=file_paths)
         messages = self._build_messages(question, context, cited, history, lang)
         if skills_block:
             messages[0]["content"] += skills_block
@@ -357,7 +359,7 @@ class SilvestarAI:
     async def stream_chat(self, question: str, user_id: str = "anon", vault_session_token: str = "",
                           history: list[dict] | None = None, lang: str = "", folder: str = "",
                           file_path: str = "", engine: str = "", use_tools: bool = True,
-                          use_skills: bool = True):
+                          use_skills: bool = True, file_paths: list[str] | None = None):
         """Yield SSE dicts: {'type':'meta'|'delta'|'done'|'error', ...}. Always ends
         with a done event carrying the full answer text and citations."""
         t0 = time.time()
@@ -368,7 +370,7 @@ class SilvestarAI:
                 session = await vault_svc.validate(user_id, vault_session_token)
             context, cited, skills_block, tools_used, skill_names = await self._context_for(
                 question, user_id, session, folder=folder, file_path=file_path,
-                use_tools=use_tools, use_skills=use_skills)
+                use_tools=use_tools, use_skills=use_skills, file_paths=file_paths)
             messages = self._build_messages(question, context, cited, history, lang)
             if skills_block:
                 messages[0]["content"] += skills_block

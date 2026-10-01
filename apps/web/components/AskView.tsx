@@ -20,12 +20,14 @@ const AI_LANGS = [
 
 type Cite = { i: number; library: string; title: string; score: number; doc_id: string };
 
-export function AskView({ userId, sessionToken, authToken, chatFile, onClearChatFile }: {
+export function AskView({ userId, sessionToken, authToken, chatFile, chatFiles, onClearChatFile, onClearChatFiles }: {
   userId: string;
   sessionToken: string;
   authToken?: string;
   chatFile?: { path: string; name: string } | null;
+  chatFiles?: { path: string; name: string }[] | null;
   onClearChatFile?: () => void;
+  onClearChatFiles?: () => void;
 }) {
   const { t } = useI18n();
   const [question, setQuestion] = useState("");
@@ -64,7 +66,8 @@ export function AskView({ userId, sessionToken, authToken, chatFile, onClearChat
   }, [authToken, userId]);
 
   const fileScope = chatFile?.path || "";
-  const effectiveScope = fileScope ? "" : scope;
+  const fileScopes = (chatFiles && chatFiles.length ? chatFiles.map((f) => f.path) : []);
+  const effectiveScope = (fileScope || fileScopes.length) ? "" : scope;
 
   const pickEngine = (e: string) => {
     setEngine(e);
@@ -86,7 +89,7 @@ export function AskView({ userId, sessionToken, authToken, chatFile, onClearChat
     try {
       for await (const ev of api.askStream(
         q, userId, sessionToken, history,
-        { lang: lang || undefined, folder: effectiveScope || undefined, file_path: fileScope || undefined, engine: engine || undefined },
+        { lang: lang || undefined, folder: effectiveScope || undefined, file_path: fileScope || undefined, file_paths: fileScopes.length ? fileScopes : undefined, engine: engine || undefined },
         ac.signal,
       )) {
         if (ev.type === "meta") {
@@ -147,7 +150,14 @@ export function AskView({ userId, sessionToken, authToken, chatFile, onClearChat
     <div>
       <div className="card">
         <h2>🤖 {t("ask")}</h2>
-        {fileScope ? (
+        {fileScopes.length ? (
+          <div className="row" style={{ justifyContent: "space-between", marginBottom: 8 }}>
+            <span className="tag vault">
+              📄 {fileScopes.length} file(s) — {chatFiles?.slice(0, 3).map((f) => f.name).join(", ")}{(chatFiles?.length || 0) > 3 ? " …" : ""}
+            </span>
+            <button className="mini ghost" onClick={() => onClearChatFiles?.()}>✕</button>
+          </div>
+        ) : fileScope ? (
           <div className="row" style={{ justifyContent: "space-between", marginBottom: 8 }}>
             <span className="tag vault">📄 {chatFile?.name} — {t("chatWithFile")}</span>
             <button className="mini ghost" onClick={() => onClearChatFile?.()}>✕</button>
