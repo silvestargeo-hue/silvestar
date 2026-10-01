@@ -266,6 +266,19 @@ export function AskView({ userId, sessionToken, authToken, chatFile, chatFiles, 
               </div>
             </>
           )}
+          {!streaming && result?.answer && (
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
+              <button className="mini ghost" title="Re-ask in very simple words"
+                onClick={() => ask(`Explain like I am 5 years old: ${question || "the answer above"}`)}>
+                🧒 ELI5</button>
+              <button className="mini ghost" title="Dig deeper into the last answer"
+                onClick={() => ask(`Go deeper: give more detail, examples and edge cases about: ${question}`)}>
+                🔭 Go deeper</button>
+              <button className="mini ghost" title="Summarize the last answer in one paragraph"
+                onClick={() => ask(`Summarize in one short paragraph: ${question}`)}>
+                📝 TL;DR</button>
+            </div>
+          )}
         </div>
       )}
     </div>
