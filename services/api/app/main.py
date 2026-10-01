@@ -2414,6 +2414,9 @@ async def admin_users(request: Request):
     metas = [(doc or r).get("meta", {}) for doc, r in zip(docs, rows)]
     vcounts = await asyncio.gather(*[auth.vault_doc_count(m.get("user_id", "")) for m in metas])
     for r, m, vc in zip(rows, metas, vcounts):
+        # only real account docs (an old stray autolock row once landed here)
+        if not m.get("user_id") or (m.get("kind") == "autolock"):
+            continue
         users.append({
             "email": r["id"].split("::", 1)[1],
             "user_id": m.get("user_id", ""),
@@ -2426,7 +2429,7 @@ async def admin_users(request: Request):
             "vault_documents": vc,
         })
     users.sort(key=lambda u: (u["role"] != "admin", u["created"]))
-    return {"total": total, "users": users}
+    return {"total": len(users), "users": users}
 
 
 @app.post("/api/v1/admin/users/{email}/suspend", tags=["admin"])
