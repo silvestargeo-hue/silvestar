@@ -26,6 +26,8 @@ class Settings:
     )
     # --- Module 8: cache ---
     redis_url: str = field(default_factory=lambda: os.getenv("REDIS_URL", ""))
+    # --- Platform cron key (GitHub Actions scheduled workflows, x-cron-key) ---
+    platform_cron_key: str = field(default_factory=lambda: os.getenv("PLATFORM_CRON_KEY", ""))
     # --- Persistent GitHub-backed store (used when no Postgres/Redis) ---
     github_token: str = field(default_factory=lambda: os.getenv("GITHUB_TOKEN", ""))
     github_data_repo: str = field(default_factory=lambda: os.getenv("GITHUB_DATA_REPO", "silvestargeo-hue/silvestar-data"))
