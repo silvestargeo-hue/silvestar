@@ -308,6 +308,23 @@ export function StudioView({ authToken, userId }: { authToken: string; userId: s
 
   const card = { marginBottom: 14 };
 
+  const makeWeeklyCast = async () => {
+    if (podBusy) return;
+    setPodBusy(true); setPodLines([]);
+    try {
+      const r = await fetch(`${API}/api/v1/studio/weekly-cast`, {
+        method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ max_files: 8 }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.detail || `${r.status}`);
+      setPodLines(j.lines || []);
+      toast(`📅 Weekly episode ready — ${j.files?.length || 0} file(s) covered`, "ok");
+    } catch (e) {
+      toast(String(e instanceof Error ? e.message : e), "err");
+    } finally { setPodBusy(false); }
+  };
+
   const makeDesign = async () => {
     const p = dPrompt.trim();
     if (p.length < 8 || designBusy) return;
@@ -402,6 +419,9 @@ export function StudioView({ authToken, userId }: { authToken: string; userId: s
           </button>
           <input value={podTitle} placeholder="Show title (optional)" style={{ flex: 1, minWidth: 140 }}
             onChange={(e) => setPodTitle(e.target.value)} disabled={podBusy} />
+          <button className="btn ghost" disabled={podBusy} onClick={makeWeeklyCast} title="Recap everything you uploaded in the last 7 days">
+            {podBusy ? "⏳" : "📅 This week's episode"}
+          </button>
         </div>
         <input ref={podRef} type="file" accept=".txt,.md,text/plain,text/markdown" hidden
           onChange={(e) => { setPodFile(e.target.files?.[0] || null); setPodLines([]); e.target.value = ""; }} />

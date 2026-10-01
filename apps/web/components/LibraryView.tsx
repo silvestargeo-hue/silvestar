@@ -594,8 +594,26 @@ export function LibraryView({ userId, sessionToken, onChatWithFile, onChatWithFi
   const [renStart, setRenStart] = useState(1);
   const [renBusy, setRenBusy] = useState(false);
   const [mapOpen, setMapOpen] = useState(false);
+  const [radarBusy, setRadarBusy] = useState(false);
+  const [radarRes, setRadarRes] = useState<{ score: number; docs_scanned: number; findings: { severity: string; kind: string; finding: string; files: string }[] } | null>(null);
   const [sumFile, setSumFile] = useState<FileMeta | null>(null);
   const [sumOne, setSumOne] = useState("");
+
+  const runRadar = async () => {
+    if (radarBusy) return;
+    setRadarBusy(true);
+    try {
+      const r = await fetch(`${API}/api/v1/radar/scan`, {
+        method: "POST", headers: authHeaders(sessionToken, userId),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.detail || `${r.status}`);
+      setRadarRes(j);
+      toast(`🩺 Health score: ${j.score}/100 (${j.findings?.length || 0} findings) — report saved to Library → Radar`, "ok");
+    } catch (e) {
+      toast(String(e instanceof Error ? e.message : e), "err");
+    } finally { setRadarBusy(false); }
+  };
   const [sumOneBusy, setSumOneBusy] = useState(false);
 
   const togglePin = async (f: FileMeta) => {
@@ -758,6 +776,9 @@ export function LibraryView({ userId, sessionToken, onChatWithFile, onChatWithFi
           <button className="btn ghost" onClick={() => setMapOpen(true)} title="AI mind-map of this folder's concepts">
             🕸 Mind-map
           </button>
+          <button className="btn ghost" disabled={radarBusy} onClick={runRadar} title="Scan the Library for contradictions, stale facts and gaps">
+            {radarBusy ? "⏳ Scanning…" : "🩺 Radar"}
+          </button>
           <button className="btn ghost" onClick={() => setNewFolderOpen(true)}>📁 New folder</button>
           <button className="btn ghost" disabled={busy} onClick={() => bulkRef.current?.click()}>⬆ Bulk upload</button>
           <button className="btn primary" disabled={busy} onClick={() => oneRef.current?.click()}>⬆ Upload</button>
@@ -768,6 +789,28 @@ export function LibraryView({ userId, sessionToken, onChatWithFile, onChatWithFi
       <input ref={bulkRef} type="file" multiple hidden onChange={(e) => { doUpload(e.target.files, true); e.target.value = ""; }} />
       <input ref={zipRef} type="file" accept=".zip,application/zip" hidden
         onChange={(e) => { handleZip(e.target.files?.[0] || null); e.target.value = ""; }} />
+
+      {/* radar results panel */}
+      {radarRes && (
+        <div className="card" style={{ marginBottom: 12 }}>
+          <div className="row" style={{ justifyContent: "space-between" }}>
+            <b>🩺 Library health: {radarRes.score}/100</b>
+            <span className="muted small">{radarRes.docs_scanned} files scanned · report saved to Radar/</span>
+            <button className="mini ghost" onClick={() => setRadarRes(null)}>✕</button>
+          </div>
+          {(radarRes.findings || []).length === 0 ? (
+            <div className="hint" style={{ marginTop: 6 }}>✅ No contradictions, stale facts or gaps found.</div>
+          ) : radarRes.findings.map((f, i) => (
+            <div key={i} className="hit" style={{ marginTop: 6 }}>
+              <div className="t">
+                {f.kind === "contradiction" ? "⚔️" : f.kind === "stale" ? "🕒" : "🧩"} {f.finding}
+                {" "}<span className={`tag ${f.severity === "high" ? "vault" : "archive"}`}>{f.severity}</span>
+              </div>
+              {f.files && <div className="muted small">{f.files}</div>}
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* trash panel */}
       {trashOpen && (

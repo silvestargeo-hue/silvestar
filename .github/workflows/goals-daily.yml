@@ -1,0 +1,26 @@
+name: Daily goals tick
+
+# Runs every due Autonomous Goal subtask: the agent produces deliverables and
+# files them into each owner's Library → Goals/<goal>/. Free, on cron key.
+
+on:
+  schedule:
+    - cron: "45 4 * * *"   # daily 04:45 UTC (after skill harvest, before crew)
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger goals tick
+        env:
+          CRON_KEY: ${{ secrets.CRON_KEY }}
+        run: |
+          code=$(curl -s -o /tmp/goals.json -w "%{http_code}" -X POST \
+            https://silvestar-api.vercel.app/api/v1/goals/tick \
+            -H "x-cron-key: ${CRON_KEY}" --max-time 600)
+          echo "HTTP $code"; head -c 600 /tmp/goals.json; echo
+          test "$code" = "200"

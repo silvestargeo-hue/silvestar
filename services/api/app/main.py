@@ -35,6 +35,8 @@ from .core.crew import run_crew
 from .core import media as media_svc
 from .core import study as study_svc
 from .core import memory as memory_svc
+from .core import goals as goals_svc
+from .core import radar as radar_svc
 from .core import spaces as spaces_svc
 from .core.graph import graph
 from .core.realtime import Client, hub, livekit
@@ -342,6 +344,107 @@ async def memory_add(body: MemoryIn, request: Request):
         raise HTTPException(401, "sign in required")
     ok = await memory_svc.remember_fact(uid, body.text, kind="taught")
     return {"stored": ok}
+
+
+# ------------------------------------------- Module 27: Autonomous Goals ----
+class GoalIn(BaseModel):
+    title: str = Field(min_length=6, max_length=140)
+    details: str = Field(default="", max_length=1000)
+    interval_hours: int = Field(24, ge=1, le=168)
+
+
+@app.post("/api/v1/goals", tags=["goals"])
+async def goals_create(body: GoalIn, request: Request):
+    """Create a standing goal: the AI plans 2-4 recurring subtasks that the
+    daily tick executes autonomously, filing deliverables in Library → Goals/."""
+    uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in required")
+    out = await goals_svc.create_goal(uid, body.title.strip(), body.details.strip(), body.interval_hours)
+    reg_id = "greg-" + __import__("hashlib").sha1(uid.encode()).hexdigest()[:12]
+    await db.upsert_document(reg_id, "goals-registry", uid, f"goals:{uid}",
+                             meta={"kind": "goals-lib"})
+    return out
+
+
+@app.get("/api/v1/goals", tags=["goals"])
+async def goals_list(request: Request):
+    uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in required")
+    return await goals_svc.list_goals(uid)
+
+
+@app.delete("/api/v1/goals/{goal_id}", tags=["goals"])
+async def goals_delete(goal_id: str, request: Request):
+    uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in required")
+    if not await goals_svc.delete_goal(uid, goal_id):
+        raise HTTPException(404, "goal not found")
+    return {"deleted": True}
+
+
+@app.post("/api/v1/goals/tick", tags=["goals"])
+async def goals_tick(request: Request):
+    """Run every due goal subtask for every user. Called by the platform cron
+    (x-cron-key) or an admin session."""
+    await _require_cron(request)
+    return await goals_svc.tick_goals()
+
+
+# ------------------------------------------- Module 28: Contradiction Radar --
+@app.post("/api/v1/radar/scan", tags=["radar"])
+async def radar_scan(request: Request):
+    """Scan the Library for contradictions, stale facts and gaps; returns
+    findings + a 0-100 health score and files a report in Library → Radar/."""
+    uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in required")
+    return await radar_svc.scan(uid)
+
+
+# ------------------------------------------- Module 29: Weekly Library cast --
+class WeeklyCastIn(BaseModel):
+    max_files: int = Field(8, ge=2, le=12)
+
+
+@app.post("/api/v1/studio/weekly-cast", tags=["studio"])
+async def studio_weekly_cast(request: Request, body: WeeklyCastIn = None):
+    """Turn this week's new Library files into a two-host podcast episode
+    (MAYA & LEO). Returns lines for the player; does not save a file copy."""
+    uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "signing in required")
+    week_ago = int(time.time()) - 7 * 86400
+    rf = (await file_store.list_files(uid)).get("files", [])
+    fresh = [f for f in rf if int(f.get("uploaded", 0)) >= week_ago][: ((body.max_files if body else 8))]
+    if not fresh:
+        raise HTTPException(422, "no files added in the last 7 days")
+    texts = []
+    for f in fresh:
+        got = await file_store.download(uid, f.get("path", ""))
+        if got:
+            texts.append(f"== {f['name']} ==\n" + got[0].decode("utf-8", "ignore")[:2500])
+    if not texts:
+        raise HTTPException(422, "new files are not readable text")
+    res = await ai.summarize(
+        "Create a fun two-host podcast episode recapping the user's week of "
+        "uploads. Hosts: MAYA (curious) and LEO (expert). ~10 exchanges, max "
+        "350 words. Format STRICTLY as alternating lines 'MAYA: ...' / 'LEO: ...'. "
+        "Mention file names naturally. No markdown, start with MAYA.",
+        ("\n\n".join(texts))[:30000],
+    )
+    script = str(res.get("summary", "")).strip()
+    lines = []
+    for ln in script.splitlines():
+        ln = ln.strip().lstrip("-*• ")
+        if ":" in ln and ln.split(":", 1)[0].strip().upper() in ("MAYA", "LEO"):
+            lines.append(ln)
+    if len(lines) < 4:
+        raise HTTPException(502, "model returned no usable dialogue")
+    return {"lines": lines[:60], "files": [f["name"] for f in fresh],
+            "engine": res.get("engine", "")}
 
 
 # ------------------------------------------------- Module 24: Briefing ------

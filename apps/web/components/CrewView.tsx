@@ -18,6 +18,8 @@ type CrewResult = {
 
 type Job = { id: string; task: string; interval_hours: number; runs: number; last_run: number };
 type ResearchJob = { id: string; topic: string; interval_days: number; runs: number; last_run: number };
+type GoalSub = { id: string; title: string; repeat: string; runs: number; last_run: number };
+type Goal = { id: string; title: string; details?: string; interval_hours: number; runs: number; last_run: number; status: string; subtasks: GoalSub[] };
 
 export function CrewView({ userId, sessionToken, authToken, offline = false, pendingSync = 0 }: {
   userId: string; sessionToken: string; authToken?: string; offline?: boolean; pendingSync?: number;
@@ -32,6 +34,10 @@ export function CrewView({ userId, sessionToken, authToken, offline = false, pen
   const [rjobs, setRjobs] = useState<ResearchJob[]>([]);
   const [rtopic, setRtopic] = useState("");
   const [rbusy, setRbusy] = useState(false);
+  const [goals, setGoals] = useState<Goal[]>([]);
+  const [gTitle, setGTitle] = useState("");
+  const [gDetails, setGDetails] = useState("");
+  const [gbusy, setGbusy] = useState(false);
   const { listening, start, supported: sttSupported } = useSpeechInput((v) => setTask(v));
 
   const loadJobs = () => {
@@ -44,6 +50,11 @@ export function CrewView({ userId, sessionToken, authToken, offline = false, pen
       .then((r) => (r.ok ? r.json() : { jobs: [] }))
       .then((d) => setRjobs(d.jobs || []))
       .catch(() => setRjobs([]));
+    // autonomous goals
+    fetch(`${API}/api/v1/goals`, { headers: authToken ? { Authorization: `Bearer ${authToken}` } : {} })
+      .then((r) => (r.ok ? r.json() : { goals: [] }))
+      .then((d) => setGoals(d.goals || []))
+      .catch(() => setGoals([]));
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(loadJobs, []);
@@ -132,6 +143,35 @@ export function CrewView({ userId, sessionToken, authToken, offline = false, pen
     } catch {}
   };
 
+  const addGoal = async () => {
+    const title = gTitle.trim();
+    if (title.length < 6 || gbusy) return;
+    setGbusy(true);
+    try {
+      const r = await fetch(`${API}/api/v1/goals`, {
+        method: "POST", headers: { "Content-Type": "application/json", ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) },
+        body: JSON.stringify({ title, details: gDetails.trim(), interval_hours: 24 }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.detail || `${r.status}`);
+      setGTitle(""); setGDetails("");
+      toast(`⭐ Goal planned with ${j.subtasks?.length || 0} autonomous subtasks — deliverables land in Library → Goals`, "ok");
+      loadJobs();
+    } catch (e) {
+      toast(String(e instanceof Error ? e.message : e), "err");
+    } finally { setGbusy(false); }
+  };
+
+  const deleteGoal = async (id: string) => {
+    if (!confirm("Delete this goal and its subtasks?")) return;
+    try {
+      await fetch(`${API}/api/v1/goals/${encodeURIComponent(id)}`, {
+        method: "DELETE", headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+      });
+      loadJobs();
+    } catch {}
+  };
+
   return (
     <div className="view">
       <div className="view-head">
@@ -174,6 +214,37 @@ export function CrewView({ userId, sessionToken, authToken, offline = false, pen
               <span className="muted small"> · {t("jobDueIn")}: {j.interval_hours}h · runs: {j.runs}</span>
             </span>
             <button className="btn tiny danger" onClick={() => deleteJob(j.id)}>🗑</button>
+          </div>
+        ))}
+      </div>
+
+      {/* autonomous goals */}
+      <div className="card">
+        <b>⭐ Autonomous goals</b>
+        <div className="hint">Give Silvestar a standing goal — a planner turns it into recurring subtasks that run themselves and file deliverables in Library → Goals/&lt;goal&gt;.</div>
+        <div className="row" style={{ marginTop: 8, flexWrap: "wrap", gap: 8 }}>
+          <input value={gTitle} placeholder="e.g. Keep me on top of AI safety news"
+            onChange={(e) => setGTitle(e.target.value)} disabled={gbusy} style={{ flex: 1, minWidth: 220 }} />
+          <button className="btn primary" disabled={gbusy || gTitle.trim().length < 6} onClick={addGoal}>
+            {gbusy ? "⏳ Planning…" : "⭐ Set goal"}
+          </button>
+        </div>
+        <input value={gDetails} placeholder="Optional details / context"
+          onChange={(e) => setGDetails(e.target.value)} disabled={gbusy}
+          style={{ width: "100%", marginTop: 8, background: "transparent", color: "inherit", border: "1px solid var(--border,#444)", borderRadius: 8, padding: 8 }} />
+        {goals.length === 0 ? (
+          <div className="muted small" style={{ marginTop: 6 }}>—</div>
+        ) : goals.map((g) => (
+          <div key={g.id} className="card" style={{ marginTop: 8, padding: "10px 12px" }}>
+            <div className="row" style={{ justifyContent: "space-between" }}>
+              <b>⭐ {g.title.slice(0, 70)}{g.title.length > 70 ? "…" : ""}</b>
+              <button className="btn tiny danger" onClick={() => deleteGoal(g.id)}>🗑</button>
+            </div>
+            {g.subtasks?.map((s) => (
+              <div key={s.id} className="muted small" style={{ marginTop: 4 }}>
+                ↳ {s.title} · {s.repeat || "once"} · runs: {s.runs}
+              </div>
+            ))}
           </div>
         ))}
       </div>
