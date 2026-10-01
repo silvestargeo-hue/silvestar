@@ -634,7 +634,9 @@ class FileStore:
             stem, dot, ext = old_name.rpartition(".")
             if not dot:
                 stem, ext = old_name, ""
-            folder = p[: len(p) - len(old_name) - 1] if "/" in p else ""
+            prefix = f"files/{_safe_segment(user_id)}/"
+            rel = p[len(prefix):] if p.startswith(prefix) else p
+            folder = rel.rsplit("/", 1)[0] if "/" in rel else ""
             new_name = (pattern.replace("{n}", str(n))
                                .replace("{date}", date)
                                .replace("{name}", _safe_segment(stem)[:40])
