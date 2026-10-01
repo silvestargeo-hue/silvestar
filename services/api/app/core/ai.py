@@ -218,8 +218,12 @@ class SilvestarAI:
             {"role": "system", "content": "You are Silvestar, summarizing library documents. Be concise; use short bullet points."},
             {"role": "user", "content": instruction + "\n\n" + corpus[:12000]},
         ]
-        answer = await self._post_openai(messages)
-        engine = "openai-compatible"
+
+        answer = await self._groq(messages)
+        engine = "groq"
+        if not answer:
+            answer = await self._post_openai(messages)
+            engine = "openai-compatible"
         if not answer:
             answer = await self._get_completion(instruction + "\n\n" + corpus[:6000])
             engine = "pollinations-get"
