@@ -719,6 +719,8 @@ def _job_id(uid: str, task: str) -> str:
 @app.get("/api/v1/crew/jobs", tags=["crew"])
 async def crew_jobs_list(request: Request):
     uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in required")
     hits = await db.search(f"crew-jobs:{uid}", " ", limit=50)
     jobs = []
     for h in hits:
@@ -742,6 +744,8 @@ class CrewJobIn(BaseModel):
 @app.post("/api/v1/crew/jobs", tags=["crew"])
 async def crew_jobs_create(body: CrewJobIn, request: Request):
     uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in required")
     import json as _j
     import time as _t
     rec = {"task": body.task, "lang": body.lang, "interval_hours": body.interval_hours,
@@ -759,6 +763,8 @@ async def crew_jobs_create(body: CrewJobIn, request: Request):
 @app.delete("/api/v1/crew/jobs/{job_id}", tags=["crew"])
 async def crew_jobs_delete(job_id: str, request: Request):
     uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in required")
     doc = await db.fetch(job_id)
     if not doc or doc.get("library") != f"crew-jobs:{uid}":
         raise HTTPException(404, "job not found")
