@@ -34,8 +34,21 @@ export function VoiceGlass({
   const [caption, setCaption] = useState("");
   const [level, setLevel] = useState(0); // fake but lively waveform level
   const [result, setResult] = useState<AskResult | null>(null);
+  const [memCount, setMemCount] = useState<number | null>(null);
+  const [remembered, setRemembered] = useState<number[]>([]); // turn indexes saved
   const levelRef = useRef<number>(0);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // memory count for the header chip
+  useEffect(() => {
+    (async () => {
+      try {
+        const API = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
+        const r = await fetch(`${API}/api/v1/memory`);
+        if (r.ok) setMemCount(((await r.json()).total ?? 0) as number);
+      } catch { setMemCount(null); }
+    })();
+  }, []);
 
   const { listening: sttListening, start, stop, supported } = useSpeechInput((text) => {
     setCaption(text);
@@ -100,6 +113,26 @@ export function VoiceGlass({
     }
   };
 
+  const rememberTurn = async (i: number) => {
+    const svTurn = turns[i];
+    const youTurn = turns[i - 1];
+    if (!svTurn || remembered.includes(i)) return;
+    const fact = (youTurn ? `About me: ${youTurn.text} — ` : "") + svTurn.text.slice(0, 280);
+    try {
+      const API = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
+      const r = await fetch(`${API}/api/v1/memory`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: fact.slice(0, 400) }),
+      });
+      if (!r.ok) throw new Error(`${r.status}`);
+      setRemembered((x) => [...x, i]);
+      setMemCount((c) => (c === null ? 1 : c + 1));
+      toast("🧠 Remembered", "ok");
+    } catch (e) {
+      toast(String(e instanceof Error ? e.message : e), "err");
+    }
+  };
+
   const orbScale = 1 + level * 0.25;
 
   return (
@@ -116,6 +149,9 @@ export function VoiceGlass({
           <b>Silvestar Voice</b>
           <div className="vg-sub">{thinking ? "thinking…" : speaking ? "speaking…" : listening ? "listening…" : supported ? "tap the orb and speak" : "voice input not supported — type below"}</div>
         </div>
+        {memCount !== null && memCount > 0 && (
+          <span className="vg-mem" title="What Silvestar remembers about you">🧠 {memCount}</span>
+        )}
       </div>
 
       <div className="vg-orb-zone">
@@ -146,6 +182,13 @@ export function VoiceGlass({
           <div key={i} className={`vg-turn ${t.who}`}>
             <span className="vg-who">{t.who === "you" ? "🧑" : "✦"}</span>
             <p>{t.text}</p>
+            {t.who === "sv" && t.text.length > 40 && (
+              <button
+                className={`vg-rem ${remembered.includes(i) ? "done" : ""}`}
+                title={remembered.includes(i) ? "Saved to memory" : "Remember this"}
+                onClick={() => rememberTurn(i)}
+              >{remembered.includes(i) ? "🧠✓" : "🧠"}</button>
+            )}
           </div>
         ))}
         {result && result.citations?.length > 0 && (

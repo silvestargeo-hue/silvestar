@@ -375,6 +375,47 @@ async def goals_list(request: Request):
     return await goals_svc.list_goals(uid)
 
 
+GOAL_TEMPLATES = [
+    {"id": "learn-daily", "icon": "📚", "title": "Learn something new every day",
+     "details": "Teach me one interesting, useful thing daily with a tiny exercise.", "interval_hours": 24},
+    {"id": "fitness-coach", "icon": "🏃", "title": "Stay on track with fitness",
+     "details": "Daily workout suggestion, weekly progress review and motivation.", "interval_hours": 24},
+    {"id": "expense-watch", "icon": "💰", "title": "Track my spending habits",
+     "details": "Weekly analysis prompt: what to log, how to spot leaks, saving tips.", "interval_hours": 168},
+    {"id": "lang-drills", "icon": "🗣", "title": "Practice a new language daily",
+     "details": "Daily 5-line dialogue drill and one grammar nugget. Ask me to reply.", "interval_hours": 24},
+    {"id": "writing-habit", "icon": "✍️", "title": "Build a writing habit",
+     "details": "Daily writing prompt and weekly feedback on structure and style.", "interval_hours": 24},
+    {"id": "market-watch", "icon": "📈", "title": "Weekly market & industry watch",
+     "details": "Weekly digest of notable trends and risks in my industry, with sources of uncertainty flagged.", "interval_hours": 168},
+]
+
+
+@app.get("/api/v1/goals/templates", tags=["goals"])
+async def goals_templates():
+    """One-click goal presets."""
+    return {"templates": GOAL_TEMPLATES}
+
+
+class GoalFromTemplateIn(BaseModel):
+    template_id: str = Field(min_length=2, max_length=40)
+
+
+@app.post("/api/v1/goals/from-template", tags=["goals"])
+async def goals_from_template(body: GoalFromTemplateIn, request: Request):
+    uid = await _uid_async(request)
+    if uid == "anon":
+        raise HTTPException(401, "sign in required")
+    tpl = next((t for t in GOAL_TEMPLATES if t["id"] == body.template_id), None)
+    if not tpl:
+        raise HTTPException(404, "template not found")
+    out = await goals_svc.create_goal(uid, tpl["title"], tpl["details"], tpl["interval_hours"])
+    reg_id = "greg-" + __import__("hashlib").sha1(uid.encode()).hexdigest()[:12]
+    await db.upsert_document(reg_id, "goals-registry", uid, f"goals:{uid}",
+                             meta={"kind": "goals-lib"})
+    return out
+
+
 @app.delete("/api/v1/goals/{goal_id}", tags=["goals"])
 async def goals_delete(goal_id: str, request: Request):
     uid = await _uid_async(request)
@@ -1302,11 +1343,10 @@ async def research_jobs_tick(request: Request):
 @app.post("/api/v1/digest/weekly/tick", tags=["user"])
 async def digest_weekly_tick(request: Request):
     await _require_cron(request)
-    """Weekly digest: for every account, summarize the week's new Library files
-    and archive docs into a notification (email when the address is allowed).
-    Triggered by the weekly cron."""
+    """Weekly digest: for every account, summarize the week's activity — new
+    Library files, goal deliverables, radar findings, research + crew reports
+    — into one notification and email. Triggered by the weekly cron."""
     import time as _t
-    import datetime as _dt
     week_ago = int(_t.time()) - 7 * 86400
     out = []
     rows, _t2 = await db.list(ACCOUNTS_LIB, limit=500)
@@ -1317,21 +1357,36 @@ async def digest_weekly_tick(request: Request):
         if not uid:
             continue
         try:
-            idx = await file_store.stats(uid)
-            new_files = idx.get("files", 0)  # total for now; per-week filter below via uploads
             files_rows = (await file_store.list_files(uid)).get("files", [])
             fresh = [f for f in files_rows if int(f.get("uploaded", 0)) >= week_ago]
-            arc_rows, arc_total = await db.list("archive", limit=200)
-            fresh_arc = [a for a in arc_rows if int((_dt.datetime.fromisoformat(a["snippet"][:19]) ).timestamp()) >= week_ago] if False else []
+            week_files = [f for f in fresh if "/" not in f.get("folder", "") or not f.get("folder", "")]
+            goal_files = [f for f in fresh if f.get("folder", "").startswith("Goals/")]
+            radar_files = [f for f in fresh if f.get("folder", "") == "Radar"]
+            research_files = [f for f in fresh if f.get("folder", "") == "Research"]
+            crew_files = [f for f in fresh if f.get("folder", "") == "Crew-Reports"]
             if not fresh:
                 continue
-            names = ", ".join(f["name"] for f in fresh[:8])
+            sections = []
+            if week_files:
+                sections.append("NEW FILES: " + ", ".join(f["name"] for f in week_files[:8]))
+            if goal_files:
+                sections.append(f"GOAL DELIVERABLES: {len(goal_files)} (latest: {goal_files[0]['name'][:60]})")
+            if radar_files:
+                sections.append(f"RADAR REPORTS: {len(radar_files)} (latest: {radar_files[0]['name'][:50]})")
+            if research_files:
+                sections.append(f"RESEARCH REPORTS: {len(research_files)} ({', '.join(f['name'][:40] for f in research_files[:3])})")
+            if crew_files:
+                sections.append(f"CREW REPORTS: {len(crew_files)}")
+            facts = "\n".join(sections)
             summary = await ai.summarize(
-                "Write a 2-3 sentence friendly weekly digest of what the user added "
-                "to their library this week and one tip.",
-                f"Files added this week: {names}. Total files: {new_files}.",
+                "Write a warm 3-5 sentence weekly digest email for this user about "
+                "their week in their Silvestar platform. Mention the sections "
+                "naturally (files added, autonomous goals progress, library health "
+                "scans, research/crew reports). End with one small suggestion for "
+                "next week. Plain text, no markdown.",
+                facts[:4000],
             )
-            text = summary.get("summary", f"You added {len(fresh)} file(s) this week: {names}")
+            text = summary.get("summary") or f"You added {len(fresh)} file(s) this week."
             await _notify(uid, f"📅 Weekly digest: {text[:180]}")
             if settings.resend_api_key:
                 import httpx as _hx
@@ -1339,10 +1394,11 @@ async def digest_weekly_tick(request: Request):
                     "https://api.resend.com/emails",
                     headers={"Authorization": f"Bearer {settings.resend_api_key}"},
                     json={"from": settings.resend_from, "to": [email],
-                          "subject": "Silvestar — your weekly digest",
-                          "text": text[:1200]},
+                          "subject": "Silvestar — your week in review",
+                          "text": text[:1500]},
                 )
-            out.append({"user": uid, "new_files": len(fresh)})
+            out.append({"user": uid, "files": len(fresh), "goals": len(goal_files),
+                        "radar": len(radar_files), "research": len(research_files), "crew": len(crew_files)})
         except Exception as e:
             out.append({"user": uid, "error": str(e)[:100]})
     return {"digests_sent": len([o for o in out if "error" not in o]), "details": out}

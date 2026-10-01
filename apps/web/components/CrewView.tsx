@@ -38,6 +38,7 @@ export function CrewView({ userId, sessionToken, authToken, offline = false, pen
   const [gTitle, setGTitle] = useState("");
   const [gDetails, setGDetails] = useState("");
   const [gbusy, setGbusy] = useState(false);
+  const [templates, setTemplates] = useState<{ id: string; icon: string; title: string; details: string; interval_hours: number }[]>([]);
   const { listening, start, supported: sttSupported } = useSpeechInput((v) => setTask(v));
 
   const loadJobs = () => {
@@ -50,11 +51,15 @@ export function CrewView({ userId, sessionToken, authToken, offline = false, pen
       .then((r) => (r.ok ? r.json() : { jobs: [] }))
       .then((d) => setRjobs(d.jobs || []))
       .catch(() => setRjobs([]));
-    // autonomous goals
+    // autonomous goals + templates
     fetch(`${API}/api/v1/goals`, { headers: authToken ? { Authorization: `Bearer ${authToken}` } : {} })
       .then((r) => (r.ok ? r.json() : { goals: [] }))
       .then((d) => setGoals(d.goals || []))
       .catch(() => setGoals([]));
+    fetch(`${API}/api/v1/goals/templates`)
+      .then((r) => (r.ok ? r.json() : { templates: [] }))
+      .then((d) => setTemplates(d.templates || []))
+      .catch(() => setTemplates([]));
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(loadJobs, []);
@@ -162,6 +167,23 @@ export function CrewView({ userId, sessionToken, authToken, offline = false, pen
     } finally { setGbusy(false); }
   };
 
+  const addFromTemplate = async (tplId: string) => {
+    if (gbusy) return;
+    setGbusy(true);
+    try {
+      const r = await fetch(`${API}/api/v1/goals/from-template`, {
+        method: "POST", headers: { "Content-Type": "application/json", ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) },
+        body: JSON.stringify({ template_id: tplId }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.detail || `${r.status}`);
+      toast(`⭐ "${(j.title || "Goal").slice(0, 40)}" armed — ${j.subtasks?.length || 0} subtasks`, "ok");
+      loadJobs();
+    } catch (e) {
+      toast(String(e instanceof Error ? e.message : e), "err");
+    } finally { setGbusy(false); }
+  };
+
   const deleteGoal = async (id: string) => {
     if (!confirm("Delete this goal and its subtasks?")) return;
     try {
@@ -232,6 +254,16 @@ export function CrewView({ userId, sessionToken, authToken, offline = false, pen
         <input value={gDetails} placeholder="Optional details / context"
           onChange={(e) => setGDetails(e.target.value)} disabled={gbusy}
           style={{ width: "100%", marginTop: 8, background: "transparent", color: "inherit", border: "1px solid var(--border,#444)", borderRadius: 8, padding: 8 }} />
+        {templates.length > 0 && (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+            {templates.map((tp) => (
+              <button key={tp.id} className="vg-chip" style={{ position: "relative" }} disabled={gbusy}
+                title={tp.details} onClick={() => addFromTemplate(tp.id)}>
+                {tp.icon} {tp.title.length > 26 ? tp.title.slice(0, 26) + "…" : tp.title}
+              </button>
+            ))}
+          </div>
+        )}
         {goals.length === 0 ? (
           <div className="muted small" style={{ marginTop: 6 }}>—</div>
         ) : goals.map((g) => (

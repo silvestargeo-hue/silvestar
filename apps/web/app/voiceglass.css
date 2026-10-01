@@ -92,6 +92,18 @@
 .vg-turn.you { align-self: flex-end; flex-direction: row-reverse; background: rgba(138,5,255,0.18); }
 .vg-turn p { margin: 0; font-size: 14px; line-height: 1.5; }
 .vg-who { font-size: 16px; }
+.vg-mem {
+  margin-left: 8px; font-size: 12px; padding: 4px 10px; border-radius: 999px;
+  background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2);
+  backdrop-filter: blur(10px);
+}
+.vg-rem {
+  border: none; cursor: pointer; background: rgba(255,255,255,0.12);
+  color: #eef0ff; border-radius: 8px; padding: 3px 7px; font-size: 12px;
+}
+.vg-rem:hover { background: rgba(138,5,255,0.4); }
+.vg-rem.done { background: rgba(34,211,238,0.25); opacity: 0.8; }
+
 .vg-cites { display: flex; gap: 6px; flex-wrap: wrap; }
 .vg-cites .tag { background: rgba(255,255,255,0.1); color: #cfe3ff; }
 
