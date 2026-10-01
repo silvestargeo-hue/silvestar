@@ -9,7 +9,7 @@ from __future__ import annotations
 import urllib.parse
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, Response, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import zipfile
 import io
