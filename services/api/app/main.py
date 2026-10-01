@@ -436,7 +436,7 @@ class AutolockIn(BaseModel):
 
 
 def _acct_doc_id(email: str) -> str:
-    return f"account::{email}"
+    return f"autolock::{email}"
 
 
 @app.post("/api/v1/me/autolock", tags=["user"])
@@ -462,7 +462,7 @@ async def autolock_set(body: AutolockIn, request: Request):
         pin_hash = hmac.new(settings.admin_key.encode(), body.pin.strip().encode(), "sha256").hexdigest()
     rec = {"enabled": body.enabled, "pin_hash": pin_hash,
            "timeout_minutes": body.timeout_minutes, "updated": int(time.time())}
-    await db.upsert_document(_acct_doc_id(email), ACCOUNTS_LIB, "autolock",
+    await db.upsert_document(_acct_doc_id(email), "autolock", "autolock",
                              _j.dumps(rec), meta={"kind": "autolock", "user_id": uid})
     return {"ok": True, "enabled": body.enabled, "timeout_minutes": body.timeout_minutes}
 
