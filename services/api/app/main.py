@@ -1324,7 +1324,8 @@ async def reminder_delete(rid: str, request: Request):
     uid = await _uid_async(request)
     if uid == "anon":
         raise HTTPException(401, "sign in required")
-    ok = await db.delete(_rem_id(uid, rid))
+    # accept the short id or the full doc id (as returned by the list endpoint)
+    ok = await db.delete(_rem_id(uid, rid)) or await db.delete(rid)
     return {"deleted": bool(ok)}
 
 
