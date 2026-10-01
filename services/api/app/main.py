@@ -828,7 +828,7 @@ def _re_sub(pat: str, rep: str, s: str) -> str:
     return _re.sub(pat, rep, s)
 
 
-def _require_cron(request: Request) -> None:
+async def _require_cron(request: Request) -> None:
     """Auth for platform cron/automation endpoints: the shared platform cron
     key OR an admin key passes. GitHub Actions workflows send the key via the
     CRON_KEY repo secret so scheduled jobs no longer 401/403."""
