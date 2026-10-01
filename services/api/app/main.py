@@ -1203,9 +1203,13 @@ async def me_streak(request: Request):
     today = int(time.time()) // 86400
     days: dict[int, int] = {}
     try:
-        hits, _t = await db.search(f"files:{uid}", " ", limit=100)
-        for h in hits:
-            m = h.get("meta") or {}
+        # per-user file index is the source of truth (every file has `uploaded`)
+        idx = await file_store._user_index(uid)
+        for p, m in idx.get("files", {}).items():
+            d = int(m.get("uploaded") or 0) // 86400
+            if d:
+                days[d] = days.get(d, 0) + 1
+        for p, m in (idx.get("trash") or {}).items():
             d = int(m.get("uploaded") or 0) // 86400
             if d:
                 days[d] = days.get(d, 0) + 1
