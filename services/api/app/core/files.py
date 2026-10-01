@@ -494,34 +494,55 @@ class FileStore:
         return {"deleted": ok, "was_indexed": bool(meta and meta.get("indexed")), "trashed": not hard}
 
     # --------------------------------------------------------------- e2ee --
-    async def e2ee_store(self, user_id: str, name: str, mime: str, data: bytes) -> dict:
-        """Store ENCRYPTED bytes for a zero-knowledge share. Server never sees plaintext."""
+    async def e2ee_store(self, user_id: str, name: str, mime: str, wk: str, data: bytes) -> dict:
+        """Zero-knowledge share storage. Ciphertext is kept base64-TEXT in GitHub
+        (binary-safe), metadata + wrapped key live in the DB — both survive restarts."""
+        import base64 as _b64
         import secrets as _s
+        from .db import db
         tok = "ez" + _s.token_urlsafe(12)
-        path = f"e2ee/{tok}.bin"
-        await self._put_bytes(path, data, "silvestar: e2ee blob")
+        path = f"e2ee/{tok}.b64"
+        await self._put_bytes(path, _b64.b64encode(data), "silvestar: e2ee blob")
+        import json as _j
         rec = {"token": tok, "path": path, "name": name[:80], "mime": mime[:60],
                "size": len(data), "created": int(time.time()), "user_id": user_id,
-               "e2ee": True}
-        await self._kv_set("share:" + tok, rec)
-        await self._remember_share(user_id, tok, rec)
+               "wk": wk[:400]}
+        await db.upsert_document(f"e2ee:{tok}", "e2ee", name[:80], _j.dumps(rec),
+                                 meta={"kind": "e2ee"})
         return rec
 
+    async def e2ee_rec(self, token: str) -> Optional[dict]:
+        import json as _j
+        from .db import db
+        doc = await db.fetch(f"e2ee:{token}")
+        if not doc:
+            return None
+        try:
+            return _j.loads(doc.get("content") or "{}")
+        except Exception:
+            return None
+
     async def e2ee_meta(self, token: str) -> Optional[dict]:
-        rec = await self._kv_get("share:" + token)
-        if not rec or not rec.get("e2ee"):
+        rec = await self.e2ee_rec(token)
+        if not rec:
             return None
         return {"name": rec.get("name", "file"), "mime": rec.get("mime", ""),
                 "size": rec.get("size", 0), "created": rec.get("created", 0)}
 
     async def e2ee_fetch(self, token: str) -> Optional[dict]:
-        rec = await self._kv_get("share:" + token)
-        if not rec or not rec.get("e2ee"):
+        import base64 as _b64
+        rec = await self.e2ee_rec(token)
+        if not rec:
             return None
-        data = await self._get_bytes(rec.get("path", ""))
-        if data is None:
+        raw = await self._get_bytes(rec.get("path", ""))
+        if raw is None:
             return None
-        return {"name": rec.get("name", "file"), "mime": rec.get("mime", ""), "data": data}
+        try:
+            data = _b64.b64decode(raw)
+        except Exception:
+            return None
+        return {"name": rec.get("name", "file"), "mime": rec.get("mime", ""),
+                "wk": rec.get("wk", ""), "data": data}
 
     # -------------------------------------------------------------- trash --
     async def list_trash(self, user_id: str) -> dict:

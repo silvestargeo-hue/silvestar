@@ -939,8 +939,7 @@ async def e2ee_create(body: E2eeIn, request: Request):
         raise HTTPException(422, "AES key must be 16/24/32 bytes")
     from .core.security import encrypt as _sec_encrypt
     wrapped = _sec_encrypt(body.key_b64, (settings.secret_key + "pad")[:32].encode())
-    rec = await file_store.e2ee_store(uid, body.name, body.mime, blob)
-    await file_store._kv_set(f"share:{rec['token']}:wk", {"wk": wrapped})
+    rec = await file_store.e2ee_store(uid, body.name, body.mime, wrapped, blob)
     return {"token": rec["token"], "name": rec["name"]}
 
 
@@ -960,9 +959,8 @@ async def e2ee_blob(token: str):
     if not got:
         raise HTTPException(404, "not found")
     import base64 as _b64
-    wk = (await file_store._kv_get(f"share:{token}:wk") or {}).get("wk", "")
     return {"blob_b64": _b64.b64encode(got["data"]).decode(),
-            "wk_b64": _b64.b64encode(wk.encode()).decode(),
+            "wk_b64": got.get("wk", ""),
             "name": got["name"], "mime": got["mime"]}
 
 
