@@ -22,17 +22,32 @@ def _token_id(user_id: str) -> str:
     return "hooktok-" + hashlib.sha1(f"hook|{user_id}".encode()).hexdigest()[:14]
 
 
+def _index_id(token: str) -> str:
+    return "hookidx-" + hashlib.sha1(token.encode()).hexdigest()[:16]
+
+
+async def _ensure_index(user_id: str, token: str) -> None:
+    """Global token → user index so inbound webhooks resolve in one fetch."""
+    await db.upsert_document(_index_id(token), "hooks", "hook index",
+                             json.dumps({"user_id": user_id}),
+                             meta={"kind": "hook-index", "user_id": user_id})
+
+
 async def get_or_create_token(user_id: str) -> dict:
     doc = await db.fetch(_token_id(user_id))
     if doc:
         try:
-            return json.loads(doc.get("content") or "{}")
+            rec = json.loads(doc.get("content") or "{}")
         except Exception:
-            pass
+            rec = {}
+        if rec.get("token"):
+            await _ensure_index(user_id, rec["token"])
+            return rec
     tok = "svh_" + secrets.token_hex(20)
     rec = {"token": tok, "created": int(time.time()), "calls": 0}
     await db.upsert_document(_token_id(user_id), f"hooks:{user_id}", "webhook token",
                              json.dumps(rec), meta={"kind": "hook-token"})
+    await _ensure_index(user_id, tok)
     return rec
 
 
@@ -41,7 +56,22 @@ async def rotate_token(user_id: str) -> dict:
     rec = {"token": tok, "created": int(time.time()), "calls": 0, "rotated": True}
     await db.upsert_document(_token_id(user_id), f"hooks:{user_id}", "webhook token",
                              json.dumps(rec), meta={"kind": "hook-token"})
+    await _ensure_index(user_id, tok)
     return rec
+
+
+async def note_call(user_id: str) -> None:
+    """Increment the call counter on the user's token doc."""
+    doc = await db.fetch(_token_id(user_id))
+    if not doc:
+        return
+    try:
+        rec = json.loads(doc.get("content") or "{}")
+    except Exception:
+        rec = {}
+    rec["calls"] = int(rec.get("calls", 0)) + 1
+    await db.upsert_document(doc["id"], doc.get("library"), doc.get("title", ""),
+                             json.dumps(rec), meta=doc.get("meta") or {"kind": "hook-token"})
 
 
 def _log_id(user_id: str, ts: int) -> str:

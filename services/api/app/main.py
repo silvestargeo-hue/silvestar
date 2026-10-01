@@ -602,24 +602,19 @@ async def hooks_rotate(request: Request):
 
 
 async def _hook_uid(token: str) -> str | None:
-    import json as _hook_json
-    rows, _t = await db.list("hooks", limit=500)
-    for r in rows:
-        if (r.get("meta") or {}).get("kind") != "hook-token":
-            continue
+    """Resolve a webhook token to its owner via the global token index."""
+    import hashlib as _hl
+    idx_id = "hookidx-" + _hl.sha1(token.encode()).hexdigest()[:16]
+    idx = await db.fetch(idx_id)
+    if not idx or (idx.get("meta") or {}).get("kind") != "hook-index":
+        return None
+    uid = (idx.get("meta") or {}).get("user_id")
+    if uid:
         try:
-            rec = _hook_json.loads(r.get("content") or "{}")
+            await hooks_svc.note_call(uid)
         except Exception:
-            continue
-        if rec.get("token") == token:
-            try:
-                rec["calls"] = int(rec.get("calls", 0)) + 1
-                await db.upsert_document(r["id"], r["library"], r.get("title", ""),
-                                         _hook_json.dumps(rec), meta=r.get("meta") or {})
-            except Exception:
-                pass
-            return (r.get("meta") or {}).get("user_id") or r["library"].split(":", 1)[1]
-    return None
+            pass
+    return uid
 
 
 def _hook_resp(uid: str, action: str, ok: bool, detail: str, extra: dict | None = None):
