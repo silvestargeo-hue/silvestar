@@ -224,6 +224,12 @@ export const api = {
   notifications: (user_id: string) =>
     req<{ notifications: { id: string; message: string; ts: string }[]; unread: number }>(
       `/api/v1/notifications?user_id=${encodeURIComponent(user_id)}`),
+  reminders: (token: string) =>
+    req<{ reminders: { id: string; text: string; due: number; repeat: string; fired: boolean }[]; total: number }>(
+      `/api/v1/reminders`, { headers: { Authorization: `Bearer ${token}` } }),
+  fileSummarize: (path: string, token: string) =>
+    req<{ path: string; name: string; summary: string; engine: string }>(
+      `/api/v1/files/summarize?path=${encodeURIComponent(path)}`, { headers: { Authorization: `Bearer ${token}` } }),
   addNotification: (user_id: string, message: string) =>
     req<{ queued: boolean }>("/api/v1/notifications", { method: "POST", body: JSON.stringify({ user_id, message }) }),
   dismissNotification: (nid: string, user_id: string) =>

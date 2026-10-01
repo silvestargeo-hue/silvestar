@@ -79,6 +79,16 @@ export default function Home() {
   const { theme, toggle: toggleTheme } = useTheme();
   const online = useOnline();
   const { count: notifCount, refresh: refreshNotifs } = useNotificationCount(user?.user_id || "anon");
+  const [remCount, setRemCount] = useState(0);
+  useEffect(() => {
+    (async () => {
+      if (!user || !authToken) { setRemCount(0); return; }
+      try {
+        const r = await api.reminders(authToken);
+        setRemCount((r.reminders || []).filter((x) => !x.fired).length);
+      } catch { /* keep previous */ }
+    })();
+  }, [user, authToken, notifCount]);
 
   // PWA shortcuts / deep links land on /?tab=ask etc.
   // Web clipper: /?import=<encoded text>&title=…&url=… → prefills Library import
@@ -207,8 +217,8 @@ export default function Home() {
         onNavigate={(id) => setTab(id as Tab)}
         headerExtra={
           <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <button className="mini ghost bell" onClick={() => setNotifOpen(true)} aria-label="Notifications">
-              🔔{notifCount > 0 && <span className="dot">{notifCount}</span>}
+            <button className="mini ghost bell" onClick={() => setNotifOpen(true)} aria-label={`Notifications (${notifCount}) · due reminders (${remCount})`}>
+              🔔{notifCount > 0 && <span className="dot">{notifCount}</span>}{remCount > 0 && <span className="dot" style={{ background: "var(--warn, #d97706)" }}>{remCount}⏰</span>}
             </button>
             <button className="mini ghost" onClick={() => setUsOpen(true)} aria-label="Universal search">🔍</button>
             <button className="mini ghost" onClick={() => setHelpOpen(true)} aria-label="Keyboard shortcuts">⌨</button>

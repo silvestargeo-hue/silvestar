@@ -29,7 +29,7 @@ from .core.ai import ai
 from .core.cache import cache
 from .core.db import db
 from .core.files import files as file_store
-from .core.file_routes import router as files_router, _uid_async
+from .core.file_routes import router as files_router, _uid_async, _read_uid_for
 from .core import skills as skills_svc
 from .core.crew import run_crew
 from .core import media as media_svc
@@ -863,6 +863,23 @@ async def _email_owner(user_id: str, message: str) -> None:
         pass
 
 
+@app.get("/api/v1/files/summarize", tags=["files"])
+async def file_summarize(request: Request, path: str = Query(..., min_length=1)):
+    """One-tap AI summary of a single Library file (indexed text)."""
+    uid = await _uid_async(request)
+    uid = await _read_uid_for(request, uid, path)  # shared-space aware
+    from .core.files import _fdoc_id
+    doc = await db.fetch("d-" + _fdoc_id(uid, path)[2:])
+    if not doc or not doc.get("content"):
+        raise HTTPException(404, "no indexed text for this file")
+    res = await ai.summarize(
+        "Summarize this document in 3-5 short bullets. Be concrete.",
+        str(doc.get("content", ""))[:12000],
+    )
+    return {"path": path, "name": path.rsplit("/", 1)[-1],
+            "summary": res.get("summary", ""), "engine": res.get("engine", "")}
+
+
 @app.get("/api/v1/files/folder-summary", tags=["files"])
 async def folder_summary(request: Request, folder: str = Query("")):
     """AI digest of the text content of all indexed files in a folder."""
@@ -1269,6 +1286,7 @@ class NotifyIn(BaseModel):
 class ReminderIn(BaseModel):
     text: str = Field(min_length=1, max_length=280)
     due: int = Field(ge=0, le=4_102_444_800)  # unix seconds
+    repeat: str = Field("", pattern="^(|daily|weekly|monthly)$")
 
 
 def _rem_id(user_id: str, rid: str) -> str:
@@ -1285,10 +1303,11 @@ async def reminder_create(body: ReminderIn, request: Request):
     await db.upsert_document(
         _rem_id(uid, rid), f"reminders:{uid}", body.text,
         __import__("json").dumps({"text": body.text, "due": int(body.due),
+                                  "repeat": body.repeat or "",
                                   "fired": False, "created": int(time.time())}),
         meta={"kind": "reminder"},
     )
-    return {"id": rid, "text": body.text, "due": int(body.due)}
+    return {"id": rid, "text": body.text, "due": int(body.due), "repeat": body.repeat or ""}
 
 
 @app.get("/api/v1/reminders", tags=["user"])
@@ -1307,11 +1326,37 @@ async def reminder_list(request: Request):
         except Exception:
             continue
         if rec.get("due", 0) <= now and not rec.get("fired"):
-            rec["fired"] = True
+            rep = rec.get("repeat") or ""
+            if rep in ("daily", "weekly", "monthly"):
+                # recurring: roll to the next future occurrence, notify once, stay armed
+                if rep == "daily":
+                    step = 86400
+                elif rep == "weekly":
+                    step = 7 * 86400
+                else:
+                    step = 0  # monthly handled calendar-wise below
+                if step:
+                    d = int(rec["due"])
+                    while d <= now:
+                        d += step
+                    rec["due"] = d
+                else:
+                    import datetime as _dt
+                    base = _dt.datetime.fromtimestamp(int(rec["due"]), _dt.timezone.utc)
+                    while int(base.timestamp()) <= now:
+                        m = base.month % 12 + 1
+                        y = base.year + (1 if base.month == 12 else 0)
+                        try:
+                            base = base.replace(year=y, month=m)
+                        except ValueError:  # e.g. Jan 31 → Feb
+                            base = base.replace(year=y, month=m, day=28)
+                    rec["due"] = int(base.timestamp())
+            else:
+                rec["fired"] = True
             fired_rows.append((r["id"], rec))
             await _notify(uid, f"⏰ Reminder: {rec.get('text', '')[:120]}")
         out.append({"id": r["id"], "text": rec.get("text", ""), "due": rec.get("due", 0),
-                    "fired": rec.get("fired", False)})
+                    "repeat": rec.get("repeat", ""), "fired": rec.get("fired", False)})
     for rid, rec in fired_rows:
         await db.upsert_document(rid, f"reminders:{uid}", rec.get("text", ""),
                                  _j.dumps(rec), meta={"kind": "reminder"})

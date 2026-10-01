@@ -566,6 +566,22 @@ export function LibraryView({ userId, sessionToken, onChatWithFile, onChatWithFi
   const [renPattern, setRenPattern] = useState("");
   const [renStart, setRenStart] = useState(1);
   const [renBusy, setRenBusy] = useState(false);
+  const [sumFile, setSumFile] = useState<FileMeta | null>(null);
+  const [sumOne, setSumOne] = useState("");
+  const [sumOneBusy, setSumOneBusy] = useState(false);
+
+  const runFileSummary = async (f: FileMeta) => {
+    setSumFile(f); setSumOne(""); setSumOneBusy(true);
+    try {
+      const r = await fetch(`${API}/api/v1/files/summarize?path=${encodeURIComponent(f.path)}`, { headers: authHeaders(sessionToken, userId) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.detail || `${r.status}`);
+      setSumOne(j.summary || "");
+    } catch (e) {
+      toast(String(e instanceof Error ? e.message : e), "err");
+      setSumFile(null);
+    } finally { setSumOneBusy(false); }
+  };
 
   const batchRename = async () => {
     if (renBusy || !renPattern.trim()) return;
@@ -965,8 +981,8 @@ export function LibraryView({ userId, sessionToken, onChatWithFile, onChatWithFi
                 <button className="btn tiny" onClick={() => dl(f)} title="Download">⬇</button>
               <button className="btn tiny" onClick={() => { setRenameTarget(f); setRenameVal(f.name); }} title="Rename">✏</button>
               <button className="btn tiny" onClick={() => { setMoveTarget(f); setMoveVal(f.folder); }} title="Move to folder">➡</button>
-              <button className="btn tiny" onClick={() => setShareTarget(f)} title="Public share link">🔗</button>
-              <button className="btn tiny" onClick={() => openVersions(f)} title="Version history">🕓</button>
+              <button className="btn tiny" onClick={() => setShareTarget(f)} title="Public share link">🔗</button>                <button className="btn tiny" onClick={() => openVersions(f)} title="Version history">🕓</button>
+                {f.indexed && <button className="btn tiny" onClick={() => runFileSummary(f)} title="AI summary">✨</button>}
               {f.indexed && <button className="btn tiny" onClick={() => chatWithFile(f)} title={t("chatWithFile")}>💬</button>}
               <button className="btn tiny danger" onClick={() => doDelete(f)} title="Delete">🗑</button>
               </div>
@@ -989,6 +1005,7 @@ export function LibraryView({ userId, sessionToken, onChatWithFile, onChatWithFi
                   <button className="btn tiny" onClick={() => { setRenameTarget(f); setRenameVal(f.name); }}>✏</button>
                 <button className="btn tiny" onClick={() => { setMoveTarget(f); setMoveVal(f.folder); }}>➡</button>
                 <button className="btn tiny" onClick={() => setShareTarget(f)} title="Public share link">🔗</button>                  <button className="btn tiny" onClick={() => openVersions(f)} title="Version history">🕓</button>
+                  {f.indexed && <button className="btn tiny" onClick={() => runFileSummary(f)} title="AI summary">✨</button>}
                   {f.indexed && <button className="btn tiny" onClick={() => chatWithFile(f)} title={t("chatWithFile")}>💬</button>}
                   <button className="btn tiny danger" onClick={() => doDelete(f)}>🗑</button>
                 </td>
@@ -996,6 +1013,23 @@ export function LibraryView({ userId, sessionToken, onChatWithFile, onChatWithFi
             ))}
           </tbody>
         </table>
+      )}
+
+      {/* one-tap AI summary modal */}
+      {sumFile && (
+        <Modal title={`✨ ${sumFile.name}`} onClose={() => setSumFile(null)}>
+          {sumOneBusy ? (
+            <div className="hint">⏳ Summarizing…</div>
+          ) : (
+            <div style={{ marginTop: 4 }}>
+              {renderMarkdown(sumOne || "No summary produced.")}
+              <div className="row" style={{ marginTop: 12, justifyContent: "flex-end" }}>
+                <button className="btn ghost" onClick={() => { navigator.clipboard?.writeText(sumOne); toast("Summary copied", "ok"); }}>📋 Copy</button>
+                {onChatWithFile && <button className="btn primary" onClick={() => { setSumFile(null); chatWithFile(sumFile); }}>💬 Chat with this file</button>}
+              </div>
+            </div>
+          )}
+        </Modal>
       )}
 
       {/* viewer modal */}

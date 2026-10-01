@@ -19,7 +19,7 @@ type FileStats = { files: number; folders: number; bytes: number; indexed: numbe
 type DeckRow = { name: string; cards: number; due: number };
 type SpaceRow = { name: string; role: string; folder: string };
 type CrewFile = { name: string; path: string; uploaded: number };
-type RemRow = { id: string; text: string; due: number; fired: boolean };
+type RemRow = { id: string; text: string; due: number; repeat: string; fired: boolean };
 
 const API = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
 
@@ -72,6 +72,7 @@ export function UserPanel({ userId, authToken, sessionToken, userName, onNavigat
   const [rems, setRems] = useState<RemRow[]>([]);
   const [remText, setRemText] = useState("");
   const [remWhen, setRemWhen] = useState("");
+  const [remRep, setRemRep] = useState("");
   const [remBusy, setRemBusy] = useState(false);
   const [widgets, setWidgets] = useState<WidgetId[]>(DEFAULT_WIDGETS);
   const [customize, setCustomize] = useState(false);
@@ -122,7 +123,7 @@ export function UserPanel({ userId, authToken, sessionToken, userName, onNavigat
     try {
       const r = await fetch(`${API}/api/v1/reminders`, {
         method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify({ text: txt, due }),
+        body: JSON.stringify({ text: txt, due, repeat: remRep }),
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.detail || `${r.status}`);
@@ -255,6 +256,12 @@ export function UserPanel({ userId, authToken, sessionToken, userName, onNavigat
               onKeyDown={(e) => e.key === "Enter" && addReminder()} disabled={remBusy} />
             <input type="datetime-local" value={remWhen} style={{ width: 200 }}
               onChange={(e) => setRemWhen(e.target.value)} disabled={remBusy} />
+            <select value={remRep} onChange={(e) => setRemRep(e.target.value)} disabled={remBusy} aria-label="Repeat">
+              <option value="">once</option>
+              <option value="daily">daily</option>
+              <option value="weekly">weekly</option>
+              <option value="monthly">monthly</option>
+            </select>
             <button className="btn primary" disabled={remBusy || !remText.trim() || !remWhen} onClick={addReminder}>
               {remBusy ? "⏳" : "➕ Set"}
             </button>
@@ -266,7 +273,7 @@ export function UserPanel({ userId, authToken, sessionToken, userName, onNavigat
               {rems.slice(0, 6).map((r) => (
                 <div key={r.id} className="hit" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                   <div>
-                    <div className="t">{r.fired ? "🔔" : "⏰"} {r.text}</div>
+                    <div className="t">{r.fired ? "🔔" : "⏰"} {r.text}{r.repeat ? ` (${r.repeat})` : ""}</div>
                     <div className="muted small">{new Date(r.due * 1000).toLocaleString()}{r.fired ? " · notified" : ""}</div>
                   </div>
                   <button className="mini ghost" onClick={() => delReminder(r.id)} title="Delete reminder">✕</button>
