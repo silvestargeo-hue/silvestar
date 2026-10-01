@@ -291,7 +291,10 @@ async def rag_query(body: AskIn):
 
 @app.post("/api/v1/ask", tags=["ai"])
 async def ask(body: AskIn, request: Request):
-    uid = body.user_id or await _uid_async(request)
+    # server-derived uid wins when signed in (memory/RAG consistency);
+    # client-supplied user_id only serves anonymous/local usage
+    session_uid = await _uid_async(request)
+    uid = session_uid if session_uid != "anon" else (body.user_id or "anon")
     return await ai.chat(body.question, uid, body.vault_session_token, body.history,
                          lang=body.lang, folder=body.folder, file_path=body.file_path,
                          engine=body.engine, use_tools=body.use_tools, use_skills=body.use_skills,
