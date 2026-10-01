@@ -86,6 +86,10 @@ class EmbeddedGraph:
                 hits.append(n)
         return hits[:50]
 
+    async def nodes_with_prefix(self, prefix: str) -> list[dict]:
+        """All nodes whose id starts with prefix (used for per-user graphs)."""
+        return [dict(n) for n in self._nodes.values() if str(n.get("id", "")).startswith(prefix)]
+
     async def stats(self) -> dict:
         rel_counts: dict[str, int] = {}
         for e in self._edges:
@@ -185,6 +189,14 @@ class Graph:
 
     async def query(self, cypher_like: str) -> list[dict]:
         return await self._impl.query(cypher_like)
+
+    async def nodes_with_prefix(self, prefix: str) -> list[dict]:
+        fn = getattr(self._impl, "nodes_with_prefix", None)
+        if fn:
+            return await fn(prefix)
+        # fallback for engines without the helper (e.g. Neo4j): filter query
+        rows = await self._impl.query(prefix)
+        return [r for r in rows if str(r.get("id", "")).startswith(prefix)]
 
     async def stats(self) -> dict:
         return await self._impl.stats()

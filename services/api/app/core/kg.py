@@ -80,11 +80,8 @@ async def map_data(user_id: str) -> dict:
     nodes: dict[str, KgNode] = {}
     links: list[KgLink] = []
     try:
-        rows = await graph.query(f"user: {user_id}")
-        for r in rows:
+        for r in await graph.nodes_with_prefix(prefix):
             nid = str(r.get("id", ""))
-            if not nid.startswith(prefix):
-                continue
             name = str((r.get("props") or {}).get("name") or nid.split("|")[-1])
             nodes[nid] = {"id": nid, "name": name, "deg": 0}
     except Exception:
@@ -132,12 +129,11 @@ async def connect(user_id: str, source: str, target: str) -> dict:
 
 
 async def _all_nodes(user_id: str) -> list[str]:
-    """All node ids in this user's namespace (embedded query over props)."""
+    """All node ids in this user's namespace."""
     from .graph import graph
     try:
-        rows = await graph.query(f"user: {user_id}")
-        return [r.get("id", "") for r in rows
-                if str(r.get("id", "")).startswith(f"u|{user_id}|")]
+        rows = await graph.nodes_with_prefix(f"u|{user_id}|")
+        return [str(r.get("id", "")) for r in rows]
     except Exception:
         return []
 
